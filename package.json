@@ -1,0 +1,6 @@
+{
+  "scripts": {
+    "build": "sh build.sh",
+    "deploy": "npx --yes wrangler@4.152.0 deploy"
+  }
+}

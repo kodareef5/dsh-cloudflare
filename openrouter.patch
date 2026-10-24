@@ -1,0 +1,851 @@
+MIT License
+
+Copyright (c) 2026 DeepSeek
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+diff --git a/apps/web/src/preview.ts b/apps/web/src/preview.ts
+index f3d51f8b..4206896a 100644
+--- a/apps/web/src/preview.ts
++++ b/apps/web/src/preview.ts
+@@ -9 +9 @@ import {
+-  chooseWorkerHostSource, connectWorkerHost, IMAGE_FILE_NAME,
++  connectWorkerHost, IMAGE_FILE_NAME,
+@@ -13,2 +13 @@ const image = `preview/${IMAGE_FILE_NAME}`
+-const source = await chooseWorkerHostSource({ image })
+-await connectWorkerHost(new DshWorker({ name: 'dsh-host' }), { image, overlays: source.overlays })
++await connectWorkerHost(new DshWorker({ name: 'dsh-host' }), { image, overlays: [] })
+diff --git a/deploy/flare/cordis.patch.yml b/deploy/flare/cordis.patch.yml
+new file mode 100644
+index 00000000..e0c0533d
+--- /dev/null
++++ b/deploy/flare/cordis.patch.yml
+@@ -0,0 +1,23 @@
++- id: credentials
++  disabled: true
++- id: llm-pi-ai
++  disabled: true
++- id: llm-deepseek
++  disabled: true
++- id: llm-deepseek-account
++  disabled: true
++- id: workspace-controller
++  config:
++    documentsDirectory: /dsh
++- id: agent-default-model
++  config:
++    provider: openrouter
++    model: openrouter/free
++- insert:
++    - id: credentials-memory
++      name: '@deepseek-ai/dsh-experimental-credentials-memory'
++    - id: llm-openrouter-browser
++      name: '@deepseek-ai/dsh-experimental-llm-openrouter-browser'
++      config:
++        provider: openrouter
++        apiKeyEnv: OPENROUTER_API_KEY
+diff --git a/deploy/flare/pack.ts b/deploy/flare/pack.ts
+new file mode 100644
+index 00000000..6793dedc
+--- /dev/null
++++ b/deploy/flare/pack.ts
+@@ -0,0 +1,29 @@
++import { mkdirSync, readFileSync, writeFileSync, copyFileSync } from 'node:fs'
++import { dirname, join } from 'node:path'
++import { loadOverlayPatches } from '@deepseek-ai/dsh-app-boot'
++import { collectModuleNames, packVfsImage } from '@deepseek-ai/dsh-experimental-webworker-packer'
++import {
++  configTrees, indexWorkspacePackages, installationManifest, platformHomePatch, profileRoster,
++} from '@deepseek-ai/dsh-experimental-webworker-packer/src/repository.ts'
++
++const root = process.cwd()
++const out = join(root, 'apps/web/dist')
++const overlay = loadOverlayPatches('flare', join(root, 'deploy/flare/cordis.patch.yml'))
++const extra = new Set<string>()
++collectModuleNames(overlay, extra)
++const installation = installationManifest(root)
++const manifest = JSON.parse(readFileSync(installation.manifest, 'utf8')) as { dependencies: Record<string, string> }
++for (const name of extra) manifest.dependencies[name] = '0.2.1-rc.3'
++writeFileSync(installation.manifest, JSON.stringify(manifest))
++const packed = packVfsImage({
++  profile: 'web', roster: [...profileRoster(root, 'web').roster, ...extra], installation,
++  workspaces: indexWorkspacePackages(root), resolveFrom: root,
++  configTrees: configTrees(root), homePatch: [...platformHomePatch(root, 'web'), ...overlay],
++})
++if (packed.missing.length) throw new Error(`Missing packages: ${packed.missing.join(', ')}`)
++for (const archive of [{ name: 'vfs-image.tar.gz', image: packed.image }, ...packed.lazyArchives]) {
++  const destination = join(out, 'preview', archive.name)
++  mkdirSync(dirname(destination), { recursive: true })
++  writeFileSync(destination, archive.image)
++}
++copyFileSync(join(out, 'preview.html'), join(out, 'index.html'))
+diff --git a/package.json b/package.json
+index 01e6ce1b..0cd06dac 100644
+--- a/package.json
++++ b/package.json
+@@ -222 +222,2 @@
+-    "verify-product-use": "tsx scripts/verify-product-use.ts"
++    "verify-product-use": "tsx scripts/verify-product-use.ts",
++    "build:flare": "pnpm run build:artifacts && pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview && tsx deploy/flare/pack.ts"
+@@ -304 +305,3 @@
+-    "@deepseek-ai/dsh-action-cards": "workspace:*"
++    "@deepseek-ai/dsh-action-cards": "workspace:*",
++    "@deepseek-ai/dsh-experimental-webworker-packer": "workspace:*",
++    "@deepseek-ai/dsh-app-boot": "workspace:*"
+diff --git a/packages/client/ui-settings-models/src/client/ProviderEditor.tsx b/packages/client/ui-settings-models/src/client/ProviderEditor.tsx
+index 262f8c9d..c94a682b 100644
+--- a/packages/client/ui-settings-models/src/client/ProviderEditor.tsx
++++ b/packages/client/ui-settings-models/src/client/ProviderEditor.tsx
+@@ -47 +47 @@ import styles from './ModelsSection.module.css'
+-type EditorLayout = 'deepseek' | 'pi-ai' | 'unknown'
++type EditorLayout = 'deepseek' | 'pi-ai' | 'credential' | 'unknown'
+@@ -199 +199,4 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
+-  const layout = layoutOf(namespace.ns)
++  const knownLayout = layoutOf(namespace.ns)
++  const layout = knownLayout === 'unknown' && typeof schema.getPath(fallback, ['apiKeyEnv']) === 'string'
++    ? 'credential' : knownLayout
++  const credentialOnly = props.credentialOnly === true || layout === 'credential'
+@@ -276 +279 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
+-    if (props.credentialOnly !== true) {
++    if (!credentialOnly) {
+@@ -288 +291 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
+-    if (props.credentialOnly !== true && node !== undefined && settingsPath.length === 0) {
++    if (!credentialOnly && node !== undefined && settingsPath.length === 0) {
+@@ -296 +299 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
+-    const ops: SettingsPathOpView[] = props.credentialOnly === true
++    const ops: SettingsPathOpView[] = credentialOnly
+@@ -350,3 +353,2 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
+-   * The curated fields of one known adapter family. The family arrives
+-   * narrowed so the per-family branches below are total: an unknown namespace
+-   * renders the hint instead and never reaches this body.
++   * Known adapters expose their settings; other adapters with an explicit
++   * credential reference expose only the shared API-key field.
+@@ -354 +356 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
+-  const curatedFields = (family: 'deepseek' | 'pi-ai'): ReactNode => {
++  const curatedFields = (family: 'deepseek' | 'pi-ai' | 'credential'): ReactNode => {
+@@ -440 +442 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
+-        {props.credentialOnly === true ? null : <details className={styles['customized']}>
++        {credentialOnly ? null : <details className={styles['customized']}>
+diff --git a/packages/experimental/credentials-memory/locale/en.json b/packages/experimental/credentials-memory/locale/en.json
+new file mode 100644
+index 00000000..c0585de1
+--- /dev/null
++++ b/packages/experimental/credentials-memory/locale/en.json
+@@ -0,0 +1,6 @@
++{
++  "meta": {
++    "title": "Temporary credentials",
++    "description": "Keeps disposable credentials in memory, outside the workspace filesystem."
++  }
++}
+diff --git a/packages/experimental/credentials-memory/package.json b/packages/experimental/credentials-memory/package.json
+new file mode 100644
+index 00000000..73524422
+--- /dev/null
++++ b/packages/experimental/credentials-memory/package.json
+@@ -0,0 +1,32 @@
++{
++  "name": "@deepseek-ai/dsh-experimental-credentials-memory",
++  "version": "0.2.1-rc.3",
++  "type": "module",
++  "main": "lib/index.js",
++  "types": "lib/types/index.d.ts",
++  "exports": {
++    ".": {
++      "types": "./lib/types/index.d.ts",
++      "default": "./lib/index.js"
++    },
++    "./src/*": "./src/*",
++    "./package.json": "./package.json",
++    "./locale/*.json": "./locale/*.json"
++  },
++  "license": "MIT",
++  "files": [
++    "locale/*.json",
++    "lib/index.js",
++    "lib/types/**/*.d.ts"
++  ],
++  "peerDependencies": {
++    "@deepseek-ai/cordis": "workspace:~",
++    "@deepseek-ai/dsh-credentials": "workspace:*"
++  },
++  "devDependencies": {
++    "@deepseek-ai/cordis": "workspace:~",
++    "@deepseek-ai/dsh-credentials": "workspace:*"
++  },
++  "dependencies": {},
++  "private": true
++}
+diff --git a/packages/experimental/credentials-memory/src/index.ts b/packages/experimental/credentials-memory/src/index.ts
+new file mode 100644
+index 00000000..a2ef8adc
+--- /dev/null
++++ b/packages/experimental/credentials-memory/src/index.ts
+@@ -0,0 +1,90 @@
++import type { Context } from '@deepseek-ai/cordis'
++import { CredentialProvider } from '@deepseek-ai/dsh-credentials'
++import type {
++  CredentialInfo, CredentialKey, CredentialRecord, CredentialRecordEntry,
++  CredentialRecordInfo, CredentialRef, ResolvedCredential,
++} from '@deepseek-ai/dsh-credentials'
++
++export default class MemoryCredentials extends CredentialProvider {
++  private readonly values = new Map<CredentialRef, string>()
++  private readonly records = new Map<CredentialKey, CredentialRecord>()
++  private pending: Promise<unknown> = Promise.resolve()
++  private disposed = false
++
++  constructor(ctx: Context) {
++    super(ctx)
++    ctx.effect(() => () => {
++      this.disposed = true
++      this.values.clear()
++      this.records.clear()
++    })
++  }
++
++  private assertActive(): void {
++    if (this.disposed) throw new Error('Memory credentials have been disposed')
++  }
++
++  override async resolve(ref: CredentialRef): Promise<ResolvedCredential | undefined> {
++    this.assertActive()
++    const value = this.values.get(ref)
++    return value === undefined ? undefined : { value, source: 'memory' }
++  }
++
++  override async describe(ref: CredentialRef): Promise<CredentialInfo> {
++    const resolved = await this.resolve(ref)
++    return { configured: resolved !== undefined, writable: true, ...resolved === undefined ? {} : { source: 'memory' } }
++  }
++
++  override async set(ref: CredentialRef, value: string): Promise<void> {
++    this.assertActive()
++    if (!value.trim()) throw new Error('Empty credential; use unset to remove it')
++    this.values.set(ref, value)
++    this.notifyUpdated(ref)
++  }
++
++  override async unset(ref: CredentialRef): Promise<void> {
++    this.assertActive()
++    if (this.values.delete(ref)) this.notifyUpdated(ref)
++  }
++
++  override async readRecord(key: CredentialKey): Promise<CredentialRecord | undefined> {
++    this.assertActive()
++    return structuredClone(this.records.get(key))
++  }
++
++  override async describeRecord(key: CredentialKey): Promise<CredentialRecordInfo> {
++    const record = await this.readRecord(key)
++    return { configured: record !== undefined, writable: true, ...record === undefined ? {} : { kind: record.kind } }
++  }
++
++  override async listRecords(): Promise<readonly CredentialRecordEntry[]> {
++    this.assertActive()
++    return [...this.records].map(([key, record]) => ({ key, kind: record.kind }))
++  }
++
++  override modifyRecord(
++    key: CredentialKey,
++    mutate: (current: CredentialRecord | undefined) => Promise<CredentialRecord | undefined>,
++  ): Promise<CredentialRecord | undefined> {
++    const operation = this.pending.then(async () => {
++      const current = await this.readRecord(key)
++      const next = await mutate(current)
++      this.assertActive()
++      if (next === undefined) return current
++      this.records.set(key, structuredClone(next))
++      this.notifyRecordUpdated(key)
++      return structuredClone(next)
++    })
++    this.pending = operation.catch(() => { /* A failed mutation must not block later writes. */ })
++    return operation
++  }
++
++  override async deleteRecord(key: CredentialKey): Promise<void> {
++    const operation = this.pending.then(() => {
++      this.assertActive()
++      if (this.records.delete(key)) this.notifyRecordUpdated(key)
++    })
++    this.pending = operation.catch(() => { /* The caller receives the failure; the queue remains usable. */ })
++    await operation
++  }
++}
+diff --git a/packages/experimental/credentials-memory/tsconfig.json b/packages/experimental/credentials-memory/tsconfig.json
+new file mode 100644
+index 00000000..2d7b1a88
+--- /dev/null
++++ b/packages/experimental/credentials-memory/tsconfig.json
+@@ -0,0 +1,21 @@
++{
++  "extends": "../../../tsconfig.base.json",
++  "compilerOptions": {
++    "rootDir": "src",
++    "outDir": "lib/types"
++  },
++  "include": [
++    "src"
++  ],
++  "references": [
++    {
++      "path": "../../../vendor/cosmokit"
++    },
++    {
++      "path": "../../../vendor/cordis"
++    },
++    {
++      "path": "../../credentials/credentials"
++    }
++  ]
++}
+diff --git a/packages/experimental/llm-openrouter-browser/locale/en.json b/packages/experimental/llm-openrouter-browser/locale/en.json
+new file mode 100644
+index 00000000..67ce44c0
+--- /dev/null
++++ b/packages/experimental/llm-openrouter-browser/locale/en.json
+@@ -0,0 +1,6 @@
++{
++  "meta": {
++    "title": "OpenRouter browser",
++    "description": "Streams OpenRouter text and tool calls through browser-compatible Fetch."
++  }
++}
+diff --git a/packages/experimental/llm-openrouter-browser/package.json b/packages/experimental/llm-openrouter-browser/package.json
+new file mode 100644
+index 00000000..e480453e
+--- /dev/null
++++ b/packages/experimental/llm-openrouter-browser/package.json
+@@ -0,0 +1,42 @@
++{
++  "name": "@deepseek-ai/dsh-experimental-llm-openrouter-browser",
++  "version": "0.2.1-rc.3",
++  "type": "module",
++  "main": "lib/index.js",
++  "types": "lib/types/index.d.ts",
++  "exports": {
++    ".": {
++      "types": "./lib/types/index.d.ts",
++      "default": "./lib/index.js"
++    },
++    "./src/*": "./src/*",
++    "./package.json": "./package.json",
++    "./locale/*.json": "./locale/*.json"
++  },
++  "license": "MIT",
++  "files": [
++    "locale/*.json",
++    "lib/index.js",
++    "lib/types/**/*.d.ts"
++  ],
++  "peerDependencies": {
++    "@deepseek-ai/cordis": "workspace:~",
++    "@deepseek-ai/dsh-llm": "workspace:*",
++    "@deepseek-ai/dsh-credentials": "workspace:*",
++    "@deepseek-ai/dsh-settings": "workspace:*",
++    "@deepseek-ai/cordis-plugin-loader": "workspace:~"
++  },
++  "devDependencies": {
++    "@deepseek-ai/cordis": "workspace:~",
++    "@deepseek-ai/dsh-llm": "workspace:*",
++    "@deepseek-ai/dsh-credentials": "workspace:*",
++    "@deepseek-ai/dsh-settings": "workspace:*",
++    "@deepseek-ai/cordis-plugin-loader": "workspace:~"
++  },
++  "dependencies": {
++    "@deepseek-ai/schemastery": "workspace:~",
++    "eventsource-parser": "^3.1.0",
++    "zod": "^4.4.3"
++  },
++  "private": true
++}
+diff --git a/packages/experimental/llm-openrouter-browser/src/adapter.ts b/packages/experimental/llm-openrouter-browser/src/adapter.ts
+new file mode 100644
+index 00000000..b2bd9192
+--- /dev/null
++++ b/packages/experimental/llm-openrouter-browser/src/adapter.ts
+@@ -0,0 +1,219 @@
++import { createParser } from 'eventsource-parser'
++import { z } from 'zod'
++import { attributionHeaders, LlmAdapter, LlmError, ToolCallId } from '@deepseek-ai/dsh-llm'
++import type { ContentBlock, GenerateOptions, LlmResolvedModelInfo, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
++import type { Config } from './index.ts'
++import { parseCatalog } from './catalog.ts'
++
++const detail = z.record(z.string(), z.unknown())
++const replay = z.object({ response: z.object({
++  format: z.literal('openrouter-v1'), model: z.string(), details: z.array(detail),
++}) })
++const frame = z.object({
++  error: z.object({ message: z.string().optional(), code: z.union([z.number(), z.string()]).optional() }).optional(),
++  choices: z.array(z.object({
++    index: z.number().optional(), finish_reason: z.string().nullable().optional(),
++    delta: z.object({
++      content: z.string().nullable().optional(), reasoning: z.string().nullable().optional(),
++      reasoning_details: z.array(detail).optional(),
++      tool_calls: z.array(z.object({
++        index: z.number().int().nonnegative(), id: z.string().optional(),
++        function: z.object({ name: z.string().optional(), arguments: z.string().optional() }).optional(),
++      })).optional(),
++    }).optional(),
++  })).default([]),
++  usage: z.object({
++    prompt_tokens: z.number().nonnegative(), completion_tokens: z.number().nonnegative(),
++    total_tokens: z.number().nonnegative().optional(),
++    prompt_tokens_details: z.object({ cached_tokens: z.number().nonnegative().optional() }).nullish(),
++    completion_tokens_details: z.object({ reasoning_tokens: z.number().nonnegative().optional() }).nullish(),
++  }).nullish(),
++})
++
++function requestBody(options: GenerateOptions): unknown {
++  const messages: Record<string, unknown>[] = []
++  if (options.system) messages.push({ role: 'system', content: options.system })
++  for (const message of options.messages) {
++    const content = message.content.filter(block => block.type === 'text').map(block => block.text).join('\n')
++    if (message.content.some(block => !['text', 'reasoning', 'tool-call'].includes(block.type))) {
++      throw new LlmError('OpenRouter browser adapter expects text-projected content.', 'UNSUPPORTED_CONTENT')
++    }
++    if (message.role === 'tool') {
++      messages.push({ role: 'tool', tool_call_id: message.toolCallId, content })
++    } else if (message.role === 'assistant') {
++      const calls = message.content.filter(block => block.type === 'tool-call').map(block => ({
++        id: block.id, type: 'function', function: { name: block.name, arguments: block.arguments },
++      }))
++      const stored = replay.safeParse(message.source.replayState)
++      messages.push({
++        role: 'assistant', content: content || null,
++        ...calls.length ? { tool_calls: calls } : {},
++        ...stored.success && stored.data.response.model === options.model
++          ? { reasoning_details: stored.data.response.details } : {},
++      })
++    } else {
++      messages.push({ role: message.role === 'developer' ? 'system' : message.role, content })
++    }
++  }
++  return {
++    model: options.model, messages, stream: true, stream_options: { include_usage: true },
++    ...options.tools?.length ? { tools: options.tools.map(tool => ({
++      type: 'function', function: { name: tool.name, description: tool.description, parameters: tool.parameters },
++    })) } : {},
++    ...options.maxTokens === undefined ? {} : { max_tokens: options.maxTokens },
++    ...options.temperature === undefined ? {} : { temperature: options.temperature },
++    ...options.stop === undefined ? {} : { stop: options.stop },
++  }
++}
++
++export class OpenRouterAdapter extends LlmAdapter {
++  private catalog: { at: number; models: LlmResolvedModelInfo[] } | undefined
++
++  constructor(private readonly config: Config, private readonly key: () => Promise<string>, private readonly lifetime: AbortSignal) {
++    super()
++  }
++
++  override providerInfo(provider: string): { id: string; name: string } {
++    return { id: provider, name: 'OpenRouter' }
++  }
++
++  override async listModels(_provider: string): Promise<readonly LlmResolvedModelInfo[]> {
++    if (this.catalog && Date.now() - this.catalog.at < this.config.catalogTtlMs) return this.catalog.models
++    const response = await fetch(`${this.config.baseURL.replace(/\/$/, '')}/models`, {
++      signal: AbortSignal.any([this.lifetime, AbortSignal.timeout(this.config.requestTimeoutMs)]),
++      credentials: 'omit', redirect: 'error', cache: 'no-store',
++    })
++    if (!response.ok) throw new LlmError(`OpenRouter catalog returned HTTP ${response.status}.`, 'CATALOG_ERROR', { status: response.status })
++    const models = parseCatalog(await response.json(), this.config.provider)
++    this.catalog = { at: Date.now(), models }
++    return models
++  }
++
++  override async resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo> {
++    const found = (await this.listModels(provider)).find(item => item.id === model)
++    if (!found) throw new LlmError(`OpenRouter has no tool-capable model named ${model}.`, 'MODEL_NOT_FOUND')
++    return found
++  }
++
++  override async* stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
++    const controller = new AbortController()
++    const signal = AbortSignal.any([
++      this.lifetime, controller.signal, AbortSignal.timeout(this.config.requestTimeoutMs),
++      ...options.signal === undefined ? [] : [options.signal],
++    ])
++    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
++    try {
++      const apiKey = await this.key()
++      signal.throwIfAborted()
++      const response = await fetch(`${this.config.baseURL.replace(/\/$/, '')}/chat/completions`, {
++        method: 'POST', signal, credentials: 'omit', redirect: 'error', cache: 'no-store',
++        headers: { ...attributionHeaders(), Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', 'X-OpenRouter-Title': 'DSH Flare' },
++        body: JSON.stringify(requestBody(options)),
++      })
++      if (!response.ok) {
++        await response.body?.cancel()
++        throw new LlmError(`OpenRouter returned HTTP ${response.status}. Check your API key, credit, and model access.`,
++          'PROVIDER_ERROR', { status: response.status })
++      }
++      if (!response.body || !response.headers.get('content-type')?.includes('text/event-stream')) {
++        await response.body?.cancel()
++        throw new LlmError('OpenRouter did not return an event stream.', 'INVALID_RESPONSE')
++      }
++      reader = response.body.getReader()
++      const decoder = new TextDecoder()
++      const blocks: ContentBlock[] = []
++      const slots = new Map<string, number>()
++      const toolSlots = new Map<number, { index: number; id: string; name: string; arguments: string; emitted: number }>()
++      const details = new Map<number, Record<string, unknown>>()
++      const events: string[] = []
++      let finish: string | undefined
++      let done = false
++      let usage: TokenUsage | undefined
++      const parser = createParser({ onEvent: event => events.push(event.data) })
++      while (!done) {
++        const read = await reader.read()
++        parser.feed(decoder.decode(read.value, { stream: !read.done }))
++        if (read.done) parser.reset({ consume: true })
++        for (const event of events.splice(0)) {
++          if (event === '[DONE]') { done = true; break }
++          const value = frame.parse(JSON.parse(event))
++          if (value.error) throw new LlmError(value.error.message ?? 'OpenRouter stream failed.', 'PROVIDER_ERROR')
++          if (value.usage) {
++            const cached = value.usage.prompt_tokens_details?.cached_tokens ?? 0
++            usage = {
++              inputTokens: Math.max(0, value.usage.prompt_tokens - cached), outputTokens: value.usage.completion_tokens,
++              cacheReadTokens: cached,
++              ...value.usage.total_tokens === undefined ? {} : { totalTokens: value.usage.total_tokens },
++              ...value.usage.completion_tokens_details?.reasoning_tokens === undefined
++                ? {} : { reasoningTokens: value.usage.completion_tokens_details.reasoning_tokens },
++            }
++          }
++          for (const choice of value.choices) {
++            if (choice.index !== undefined && choice.index !== 0) continue
++            if (choice.finish_reason) finish = choice.finish_reason
++            const delta = choice.delta
++            if (!delta) continue
++            for (const [type, text] of [['reasoning', delta.reasoning], ['text', delta.content]] as const) {
++              if (!text) continue
++              let index = slots.get(type)
++              if (index === undefined) {
++                index = blocks.length
++                slots.set(type, index)
++                blocks.push({ type, text: '' })
++                yield { type: 'block-start', index, blockType: type }
++              }
++              const block = blocks[index]
++              if (block?.type === 'text' || block?.type === 'reasoning') block.text += text
++              yield { type: type === 'text' ? 'text-delta' : 'reasoning-delta', index, text }
++            }
++            for (const [position, part] of (delta.reasoning_details ?? []).entries()) {
++              const index = typeof part.index === 'number' ? part.index : position
++              const previous = details.get(index) ?? {}
++              for (const [field, value] of Object.entries(part)) {
++                previous[field] = ['text', 'data', 'signature', 'summary'].includes(field)
++                  && typeof previous[field] === 'string' && typeof value === 'string' ? previous[field] + value : value
++              }
++              details.set(index, previous)
++            }
++            for (const call of delta.tool_calls ?? []) {
++              let tool = toolSlots.get(call.index)
++              if (!tool) {
++                tool = { index: blocks.length, id: '', name: '', arguments: '', emitted: 0 }
++                toolSlots.set(call.index, tool)
++                blocks.push({ type: 'tool-call', id: ToolCallId(''), name: '', arguments: '' })
++                yield { type: 'block-start', index: tool.index, blockType: 'tool-call' }
++              }
++              if (call.id) tool.id = call.id
++              if (call.function?.name) tool.name += call.function.name
++              tool.arguments += call.function?.arguments ?? ''
++              if (tool.id) {
++                yield { type: 'tool-call-delta', index: tool.index, id: ToolCallId(tool.id),
++                  ...tool.name ? { name: tool.name } : {}, argumentsDelta: tool.arguments.slice(tool.emitted) }
++                tool.emitted = tool.arguments.length
++              }
++              blocks[tool.index] = { type: 'tool-call', id: ToolCallId(tool.id), name: tool.name, arguments: tool.arguments }
++            }
++          }
++        }
++        if (read.done) break
++      }
++      if (!done || !finish) throw new LlmError('OpenRouter stream ended before completion.', 'TRUNCATED_STREAM')
++      if (!['stop', 'tool_calls', 'length'].includes(finish)) throw new LlmError(`OpenRouter stopped with ${finish}.`, 'PROVIDER_ERROR')
++      for (const tool of toolSlots.values()) {
++        if (!tool.id || !tool.name) throw new LlmError('OpenRouter returned an incomplete tool call.', 'INVALID_RESPONSE')
++      }
++      for (const [index, block] of blocks.entries()) yield { type: 'block-end', index, block }
++      if (usage) yield { type: 'usage', usage }
++      yield {
++        type: 'finish', reason: { kind: finish === 'tool_calls' ? 'tool-calls' : finish === 'length' ? 'max-tokens' : 'stop' },
++        replayState: { response: { format: 'openrouter-v1', model: options.model, details: [...details.values()] } },
++      }
++    } finally {
++      controller.abort()
++      if (reader) {
++        await reader.cancel().catch(() => { /* Aborted fetch readers can already be errored. */ })
++        reader.releaseLock()
++      }
++    }
++  }
++}
+diff --git a/packages/experimental/llm-openrouter-browser/src/catalog.ts b/packages/experimental/llm-openrouter-browser/src/catalog.ts
+new file mode 100644
+index 00000000..246d27a9
+--- /dev/null
++++ b/packages/experimental/llm-openrouter-browser/src/catalog.ts
+@@ -0,0 +1,29 @@
++import { z } from 'zod'
++import type { LlmResolvedModelInfo } from '@deepseek-ai/dsh-llm'
++
++const model = z.object({
++  id: z.string().min(1), name: z.string(), context_length: z.number().int().positive(),
++  supported_parameters: z.array(z.string()).default([]),
++  architecture: z.object({ input_modalities: z.array(z.string()) }).optional(),
++  top_provider: z.object({ max_completion_tokens: z.number().int().positive().nullable() }).optional(),
++  pricing: z.object({ prompt: z.string(), completion: z.string() }),
++})
++
++export function parseCatalog(value: unknown, provider: string): LlmResolvedModelInfo[] {
++  const parsed = z.object({ data: z.array(model) }).parse(value)
++  const price = (raw: string): string => {
++    const number = Number(raw)
++    return Number.isFinite(number) && number >= 0 ? `$${(number * 1_000_000).toLocaleString('en-US', { maximumFractionDigits: 4 })}` : 'unknown'
++  }
++  return parsed.data.filter(item => item.supported_parameters.includes('tools')
++    && (item.architecture === undefined || item.architecture.input_modalities.includes('text')))
++    .map(item => ({
++      provider, id: item.id, name: item.name,
++      inputModalities: ['text'] as const,
++      context: { contextWindow: item.context_length },
++      ...item.top_provider?.max_completion_tokens == null ? {} : { defaultMaxTokens: item.top_provider.max_completion_tokens },
++      description: `${item.id} · Context ${item.context_length.toLocaleString('en-US')}`
++        + ` · Output ${item.top_provider?.max_completion_tokens?.toLocaleString('en-US') ?? 'not reported'}`
++        + ` · Input ${price(item.pricing.prompt)} / output ${price(item.pricing.completion)} per 1M tokens`,
++    })).sort((left, right) => left.id.localeCompare(right.id))
++}
+diff --git a/packages/experimental/llm-openrouter-browser/src/index.ts b/packages/experimental/llm-openrouter-browser/src/index.ts
+new file mode 100644
+index 00000000..83b97197
+--- /dev/null
++++ b/packages/experimental/llm-openrouter-browser/src/index.ts
+@@ -0,0 +1,51 @@
++import type { Context, Volatile } from '@deepseek-ai/cordis'
++import type {} from '@deepseek-ai/cordis-plugin-loader'
++import z from '@deepseek-ai/schemastery'
++import { credentialRef } from '@deepseek-ai/dsh-credentials'
++import type {} from '@deepseek-ai/dsh-settings'
++import { assertUsableApiKey, LlmError } from '@deepseek-ai/dsh-llm'
++import { OpenRouterAdapter } from './adapter.ts'
++
++export const name = 'llm-openrouter-browser'
++export const inject = ['llm', 'credentials']
++
++export interface Config {
++    provider: string
++    apiKeyEnv: Volatile<string>
++    baseURL: string
++    catalogTtlMs: number
++    requestTimeoutMs: number
++}
++
++export const Config = z.object({
++  provider: z.string().default('openrouter-browser'),
++  apiKeyEnv: z.string().role('credential-ref').default('OPENROUTER_API_KEY').volatile(),
++  baseURL: z.string().default('https://openrouter.ai/api/v1'),
++  catalogTtlMs: z.number().min(0).default(300_000),
++  requestTimeoutMs: z.number().min(1).max(2_147_483_647).default(300_000),
++})
++
++export function apply(ctx: Context, config: Config): void {
++  if (!config.provider.trim()) throw new Error('OpenRouter provider route must not be empty')
++  const ref = credentialRef(config.apiKeyEnv.get())
++  const endpoint = new URL(config.baseURL)
++  if (endpoint.username || endpoint.password || endpoint.search || endpoint.hash
++    || (endpoint.protocol !== 'https:' && endpoint.hostname !== 'localhost' && endpoint.hostname !== '127.0.0.1')) {
++    throw new Error('OpenRouter requires an HTTPS baseURL without credentials, query, or fragment')
++  }
++  const lifetime = new AbortController()
++  ctx.effect(() => () => { lifetime.abort() })
++  const adapter = new OpenRouterAdapter(config, async () => {
++    const currentRef = credentialRef(config.apiKeyEnv.get())
++    const key = (await ctx.credentials.resolve(currentRef))?.value
++    if (!key) throw new LlmError('Add your OpenRouter API key in Settings → Models.', 'MISSING_CREDENTIAL')
++    return assertUsableApiKey(key, name, currentRef)
++  }, lifetime.signal)
++  ctx.llm.registerAdapter([config.provider], adapter)
++  ctx.inject(['settings'], (child) => { child.effect(() => child.settings.configure({ auto: false }, ctx.fiber)) })
++  ctx.llm.registerConfigurableProviders([{
++    provider: config.provider, displayName: 'OpenRouter',
++    settingsNs: ctx.fiber.entry?.options.id ?? name, settingsPath: [], declared: false,
++    defaultBaseURL: config.baseURL, nativeAuth: { env: [ref], oauth: false },
++  }])
++}
+diff --git a/packages/experimental/llm-openrouter-browser/tsconfig.json b/packages/experimental/llm-openrouter-browser/tsconfig.json
+new file mode 100644
+index 00000000..7c3daf73
+--- /dev/null
++++ b/packages/experimental/llm-openrouter-browser/tsconfig.json
+@@ -0,0 +1,33 @@
++{
++  "extends": "../../../tsconfig.base.json",
++  "compilerOptions": {
++    "rootDir": "src",
++    "outDir": "lib/types"
++  },
++  "include": [
++    "src"
++  ],
++  "references": [
++    {
++      "path": "../../../vendor/cosmokit"
++    },
++    {
++      "path": "../../../vendor/cordis"
++    },
++    {
++      "path": "../../llm/llm"
++    },
++    {
++      "path": "../../credentials/credentials"
++    },
++    {
++      "path": "../../settings/settings"
++    },
++    {
++      "path": "../../../vendor/schemastery"
++    },
++    {
++      "path": "../../../vendor/loader"
++    }
++  ]
++}
+diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index 5a36a159..583ad5cd 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -33,0 +34,3 @@ importers:
++      '@deepseek-ai/dsh-app-boot':
++        specifier: workspace:*
++        version: link:packages/boot/app-boot
+@@ -78,0 +82,3 @@ importers:
++      '@deepseek-ai/dsh-experimental-webworker-packer':
++        specifier: workspace:*
++        version: link:packages/experimental/webworker-packer
+@@ -9263,0 +9270,9 @@ importers:
++  packages/experimental/credentials-memory:
++    devDependencies:
++      '@deepseek-ai/cordis':
++        specifier: workspace:~
++        version: link:../../../vendor/cordis
++      '@deepseek-ai/dsh-credentials':
++        specifier: workspace:*
++        version: link:../../credentials/credentials
++
+@@ -9815,0 +9831,28 @@ importers:
++  packages/experimental/llm-openrouter-browser:
++    dependencies:
++      '@deepseek-ai/schemastery':
++        specifier: link:../../../vendor/schemastery
++        version: link:../../../vendor/schemastery
++      eventsource-parser:
++        specifier: ^3.1.0
++        version: 3.1.0
++      zod:
++        specifier: ^4.4.3
++        version: 4.4.3
++    devDependencies:
++      '@deepseek-ai/cordis':
++        specifier: workspace:~
++        version: link:../../../vendor/cordis
++      '@deepseek-ai/cordis-plugin-loader':
++        specifier: workspace:~
++        version: link:../../../vendor/loader
++      '@deepseek-ai/dsh-credentials':
++        specifier: workspace:*
++        version: link:../../credentials/credentials
++      '@deepseek-ai/dsh-llm':
++        specifier: workspace:*
++        version: link:../../llm/llm
++      '@deepseek-ai/dsh-settings':
++        specifier: workspace:*
++        version: link:../../settings/settings
++
+diff --git a/tsconfig.base.json b/tsconfig.base.json
+index 4a56dee4..31016be2 100644
+--- a/tsconfig.base.json
++++ b/tsconfig.base.json
+@@ -30,0 +31,2 @@
++      "@deepseek-ai/dsh-experimental-credentials-memory": ["./packages/experimental/credentials-memory/src"],
++      "@deepseek-ai/dsh-experimental-llm-openrouter-browser": ["./packages/experimental/llm-openrouter-browser/src"],
+diff --git a/tsconfig.host.json b/tsconfig.host.json
+index a8196f66..90e03660 100644
+--- a/tsconfig.host.json
++++ b/tsconfig.host.json
+@@ -10,0 +11 @@
++    "deploy/flare/pack.ts",
+@@ -258,0 +260,2 @@
++    { "path": "./packages/experimental/credentials-memory" },
++    { "path": "./packages/experimental/llm-openrouter-browser" },
+diff --git a/packages/core/tools/src/json-schema.ts b/packages/core/tools/src/json-schema.ts
+index c064fb294c..56a0269939 100644
+--- a/packages/core/tools/src/json-schema.ts
++++ b/packages/core/tools/src/json-schema.ts
+@@ -98 +98 @@ function hasIntrinsicConstructor(prototype: object, name: 'Array' | 'Object'): b
+-      && Function.prototype.toString.call(constructor) === `function ${name}() { [native code] }`
++      && Function.prototype.toString.call(constructor) === Function.prototype.toString.call(name === 'Array' ? Array : Object)
+diff --git a/packages/extensions/cordis-host-runner/src/guard.ts b/packages/extensions/cordis-host-runner/src/guard.ts
+index 4c0dd214ac..df6d0cbe92 100644
+--- a/packages/extensions/cordis-host-runner/src/guard.ts
++++ b/packages/extensions/cordis-host-runner/src/guard.ts
+@@ -50 +50 @@ function hasIntrinsicConstructor(prototype: object, name: 'Array' | 'Object'): b
+-      && Function.prototype.toString.call(constructor) === `function ${name}() { [native code] }`
++      && Function.prototype.toString.call(constructor) === Function.prototype.toString.call(name === 'Array' ? Array : Object)
+diff --git a/packages/ptc-runtime/ptc-runtime-node/src/json-wire.ts b/packages/ptc-runtime/ptc-runtime-node/src/json-wire.ts
+index 6fc8b29325..bbba7c24a6 100644
+--- a/packages/ptc-runtime/ptc-runtime-node/src/json-wire.ts
++++ b/packages/ptc-runtime/ptc-runtime-node/src/json-wire.ts
+@@ -16,0 +17,2 @@ const intrinsicReflectApply = Reflect.get(Reflect, 'apply') as (
++const intrinsicArrayConstructorSource = intrinsicReflectApply(intrinsicFunctionToString, Array, [])
++const intrinsicObjectConstructorSource = intrinsicReflectApply(intrinsicFunctionToString, Object, [])
+@@ -90 +92 @@ function hasIntrinsicConstructor(prototype: object, name: 'Array' | 'Object'): b
+-      && intrinsicReflectApply(intrinsicFunctionToString, constructor, []) === `function ${name}() { [native code] }`
++      && intrinsicReflectApply(intrinsicFunctionToString, constructor, []) === (name === 'Array' ? intrinsicArrayConstructorSource : intrinsicObjectConstructorSource)
+diff --git a/packages/bundle/web-app/presets/cordis.patch.yml b/packages/bundle/web-app/presets/cordis.patch.yml
+index 51bbd00ef9..92cd6ddcf8 100644
+--- a/packages/bundle/web-app/presets/cordis.patch.yml
++++ b/packages/bundle/web-app/presets/cordis.patch.yml
+@@ -33,0 +34 @@
++            disabled: true
+diff --git a/packages/bundle/web-app/presets/ptc.patch.yml b/packages/bundle/web-app/presets/ptc.patch.yml
+index 034a2a6457..618cf206c5 100644
+--- a/packages/bundle/web-app/presets/ptc.patch.yml
++++ b/packages/bundle/web-app/presets/ptc.patch.yml
+@@ -30,0 +31 @@
++            disabled: true
+diff --git a/packages/bundle/web-app/presets/standard.patch.yml b/packages/bundle/web-app/presets/standard.patch.yml
+index e702c4b39d..a592cab83a 100644
+--- a/packages/bundle/web-app/presets/standard.patch.yml
++++ b/packages/bundle/web-app/presets/standard.patch.yml
+@@ -30,0 +31 @@
++            disabled: true
+diff --git a/packages/experimental/webworker-runtime/src/worker.ts b/packages/experimental/webworker-runtime/src/worker.ts
+index f0912aef93..b0436fef84 100644
+--- a/packages/experimental/webworker-runtime/src/worker.ts
++++ b/packages/experimental/webworker-runtime/src/worker.ts
+@@ -27,0 +28,4 @@ import { runShellProcess } from './shell/process/host.ts'
++for (const name of ['dispose', 'asyncDispose']) {
++  if (!Object.hasOwn(Symbol, name)) Object.defineProperty(Symbol, name, { value: Symbol.for(`Symbol.${name}`) })
++}
++
