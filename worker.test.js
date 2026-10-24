@@ -59,7 +59,7 @@ test('relays subscription credentials only to fixed OpenAI endpoints and does no
     assert.equal(url, 'https://api.openai.com/v1/responses');
     assert.equal(new Headers(init.headers).get('authorization'), 'Bearer test-token');
     assert.equal(new Headers(init.headers).has('cookie'), false);
-    assert.equal(init.redirect, 'error');
+    assert.equal(init.redirect, 'manual');
     return new Response('data: test\n\n', { headers: { 'content-type': 'text/event-stream' } });
   });
   const response = await worker.fetch(new Request(`${origin}/openai/responses?url=https://attacker.example`, {
@@ -69,4 +69,23 @@ test('relays subscription credentials only to fixed OpenAI endpoints and does no
   assert.equal(response.headers.get('cache-control'), 'no-store');
   assert.equal(await response.text(), 'data: test\n\n');
   assert.equal((await worker.fetch(new Request(`${origin}/openai/unknown`, { headers: { 'x-dsh-fetch': '1' } }))).status, 404);
+});
+
+test('rejects OpenAI redirects without forwarding credentials or exposing the destination', async t => {
+  let cancelled = 0;
+  const upstream = t.mock.method(globalThis, 'fetch', async (_url, init) => {
+    assert.equal(init.redirect, 'manual');
+    return new Response(new ReadableStream({ cancel() { cancelled++; } }), {
+      status: 307, headers: { location: 'https://attacker.example/' },
+    });
+  });
+  const response = await worker.fetch(new Request(`${origin}/openai/token`, {
+    method: 'POST', headers: { 'x-dsh-fetch': '1' }, body: 'code=test-code&code_verifier=test-verifier',
+  }));
+  assert.equal(response.status, 502);
+  assert.equal(response.headers.get('cache-control'), 'no-store');
+  assert.equal(response.headers.has('location'), false);
+  assert.equal(await response.text(), 'OpenAI returned an unexpected redirect');
+  assert.equal(upstream.mock.callCount(), 1);
+  assert.equal(cancelled, 1);
 });

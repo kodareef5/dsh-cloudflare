@@ -90,9 +90,13 @@ async function openai(request, route) {
     ? "application/x-www-form-urlencoded" : "application/json");
   try {
     const response = await fetch(endpoint, {
-      method, headers, redirect: "error", signal: AbortSignal.any([request.signal, AbortSignal.timeout(300000)]),
+      method, headers, redirect: "manual", signal: AbortSignal.any([request.signal, AbortSignal.timeout(300000)]),
       body: method === "POST" ? bounded(request.body, route === "responses" ? 4 * MiB : 16384) : undefined,
     });
+    if (response.status >= 300 && response.status < 400) {
+      await response.body?.cancel();
+      return new Response("OpenAI returned an unexpected redirect", { status: 502, headers: { "cache-control": "no-store" } });
+    }
     return new Response(response.body, {
       status: response.status,
       headers: {
