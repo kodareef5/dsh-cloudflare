@@ -33,10 +33,12 @@ index f3d51f8b..4206896a 100644
 +await connectWorkerHost(new DshWorker({ name: 'dsh-host' }), { image, overlays: [] })
 diff --git a/deploy/flare/cordis.patch.yml b/deploy/flare/cordis.patch.yml
 new file mode 100644
-index 00000000..e0c0533d
+index 00000000..2cd33a07
 --- /dev/null
 +++ b/deploy/flare/cordis.patch.yml
-@@ -0,0 +1,23 @@
+@@ -0,0 +1,27 @@
++- id: ui-settings-account
++  disabled: true
 +- id: credentials
 +  disabled: true
 +- id: llm-pi-ai
@@ -60,12 +62,14 @@ index 00000000..e0c0533d
 +      config:
 +        provider: openrouter
 +        apiKeyEnv: OPENROUTER_API_KEY
++    - id: llm-chatgpt-browser
++      name: '@deepseek-ai/dsh-experimental-llm-chatgpt-browser'
 diff --git a/deploy/flare/pack.ts b/deploy/flare/pack.ts
 new file mode 100644
-index 00000000..6793dedc
+index 00000000..cff3a92a
 --- /dev/null
 +++ b/deploy/flare/pack.ts
-@@ -0,0 +1,29 @@
+@@ -0,0 +1,30 @@
 +import { mkdirSync, readFileSync, writeFileSync, copyFileSync } from 'node:fs'
 +import { dirname, join } from 'node:path'
 +import { loadOverlayPatches } from '@deepseek-ai/dsh-app-boot'
@@ -80,14 +84,15 @@ index 00000000..6793dedc
 +const extra = new Set<string>()
 +collectModuleNames(overlay, extra)
 +const installation = installationManifest(root)
-+const manifest = JSON.parse(readFileSync(installation.manifest, 'utf8')) as { dependencies: Record<string, string> }
++const originalManifest = readFileSync(installation.manifest, 'utf8')
++const manifest = JSON.parse(originalManifest) as { dependencies: Record<string, string> }
 +for (const name of extra) manifest.dependencies[name] = '0.2.1-rc.3'
 +writeFileSync(installation.manifest, JSON.stringify(manifest))
-+const packed = packVfsImage({
++const packed = (() => { try { return packVfsImage({
 +  profile: 'web', roster: [...profileRoster(root, 'web').roster, ...extra], installation,
 +  workspaces: indexWorkspacePackages(root), resolveFrom: root,
 +  configTrees: configTrees(root), homePatch: [...platformHomePatch(root, 'web'), ...overlay],
-+})
++}) } finally { writeFileSync(installation.manifest, originalManifest) } })()
 +if (packed.missing.length) throw new Error(`Missing packages: ${packed.missing.join(', ')}`)
 +for (const archive of [{ name: 'vfs-image.tar.gz', image: packed.image }, ...packed.lazyArchives]) {
 +  const destination = join(out, 'preview', archive.name)
@@ -108,6 +113,24 @@ index 01e6ce1b..0cd06dac 100644
 +    "@deepseek-ai/dsh-action-cards": "workspace:*",
 +    "@deepseek-ai/dsh-experimental-webworker-packer": "workspace:*",
 +    "@deepseek-ai/dsh-app-boot": "workspace:*"
+diff --git a/packages/bundle/web-app/presets/cordis.patch.yml b/packages/bundle/web-app/presets/cordis.patch.yml
+index 51bbd00e..92cd6ddc 100644
+--- a/packages/bundle/web-app/presets/cordis.patch.yml
++++ b/packages/bundle/web-app/presets/cordis.patch.yml
+@@ -33,0 +34 @@
++            disabled: true
+diff --git a/packages/bundle/web-app/presets/ptc.patch.yml b/packages/bundle/web-app/presets/ptc.patch.yml
+index 034a2a64..618cf206 100644
+--- a/packages/bundle/web-app/presets/ptc.patch.yml
++++ b/packages/bundle/web-app/presets/ptc.patch.yml
+@@ -30,0 +31 @@
++            disabled: true
+diff --git a/packages/bundle/web-app/presets/standard.patch.yml b/packages/bundle/web-app/presets/standard.patch.yml
+index e702c4b3..a592cab8 100644
+--- a/packages/bundle/web-app/presets/standard.patch.yml
++++ b/packages/bundle/web-app/presets/standard.patch.yml
+@@ -30,0 +31 @@
++            disabled: true
 diff --git a/packages/client/ui-settings-models/src/client/ProviderEditor.tsx b/packages/client/ui-settings-models/src/client/ProviderEditor.tsx
 index 262f8c9d..c94a682b 100644
 --- a/packages/client/ui-settings-models/src/client/ProviderEditor.tsx
@@ -142,6 +165,13 @@ index 262f8c9d..c94a682b 100644
 @@ -440 +442 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
 -        {props.credentialOnly === true ? null : <details className={styles['customized']}>
 +        {credentialOnly ? null : <details className={styles['customized']}>
+diff --git a/packages/core/tools/src/json-schema.ts b/packages/core/tools/src/json-schema.ts
+index c064fb29..56a02699 100644
+--- a/packages/core/tools/src/json-schema.ts
++++ b/packages/core/tools/src/json-schema.ts
+@@ -98 +98 @@ function hasIntrinsicConstructor(prototype: object, name: 'Array' | 'Object'): b
+-      && Function.prototype.toString.call(constructor) === `function ${name}() { [native code] }`
++      && Function.prototype.toString.call(constructor) === Function.prototype.toString.call(name === 'Array' ? Array : Object)
 diff --git a/packages/experimental/credentials-memory/locale/en.json b/packages/experimental/credentials-memory/locale/en.json
 new file mode 100644
 index 00000000..c0585de1
@@ -315,6 +345,847 @@ index 00000000..2d7b1a88
 +    }
 +  ]
 +}
+diff --git a/packages/experimental/llm-chatgpt-browser/locale/en.json b/packages/experimental/llm-chatgpt-browser/locale/en.json
+new file mode 100644
+index 00000000..66e39747
+--- /dev/null
++++ b/packages/experimental/llm-chatgpt-browser/locale/en.json
+@@ -0,0 +1,6 @@
++{
++  "meta": {
++    "title": "ChatGPT",
++    "description": "ChatGPT subscription sign-in and inference in the browser."
++  }
++}
+diff --git a/packages/experimental/llm-chatgpt-browser/package.json b/packages/experimental/llm-chatgpt-browser/package.json
+new file mode 100644
+index 00000000..f44b6b35
+--- /dev/null
++++ b/packages/experimental/llm-chatgpt-browser/package.json
+@@ -0,0 +1,74 @@
++{
++  "name": "@deepseek-ai/dsh-experimental-llm-chatgpt-browser",
++  "version": "0.2.1-rc.3",
++  "private": true,
++  "type": "module",
++  "main": "lib/index.js",
++  "types": "lib/types/index.d.ts",
++  "license": "MIT",
++  "exports": {
++    ".": {
++      "types": "./lib/types/index.d.ts",
++      "default": "./lib/index.js"
++    },
++    "./client": {
++      "types": "./lib/types/client/index.d.ts",
++      "default": "./lib/client.js"
++    },
++    "./typert": {
++      "types": "./lib/typert.host.d.ts",
++      "default": "./lib/typert.host.js"
++    },
++    "./remote": {
++      "types": "./lib/typert.remote-client.d.ts",
++      "default": "./lib/typert.remote-client.js"
++    },
++    "./src/*": "./src/*",
++    "./package.json": "./package.json",
++    "./locale/*.json": "./locale/*.json"
++  },
++  "dsh": {
++    "client": {
++      "inject": [
++        "@deepseek-ai/dsh-api-remotes",
++        "@deepseek-ai/dsh-client-ui-settings",
++        "@deepseek-ai/dsh-client-ui-renderer"
++      ],
++      "platform": "web"
++    }
++  },
++  "peerDependencies": {
++    "@deepseek-ai/cordis": "workspace:~",
++    "@deepseek-ai/dsh-llm": "workspace:*",
++    "@deepseek-ai/dsh-credentials": "workspace:*",
++    "@deepseek-ai/dsh-typert-protocol": "workspace:*"
++  },
++  "devDependencies": {
++    "@deepseek-ai/cordis": "workspace:~",
++    "@deepseek-ai/dsh-llm": "workspace:*",
++    "@deepseek-ai/dsh-credentials": "workspace:*",
++    "@deepseek-ai/dsh-typert-protocol": "workspace:*",
++    "@deepseek-ai/dsh-api-remotes": "workspace:*",
++    "@deepseek-ai/dsh-client-ui-settings": "workspace:*",
++    "@deepseek-ai/dsh-client-ui-renderer": "workspace:*",
++    "@deepseek-ai/dsh-client-ui-slots": "workspace:*",
++    "react": "^18.2.0",
++    "@deepseek-ai/dsh-client-ui-primitives": "workspace:*"
++  },
++  "dependencies": {
++    "eventsource-parser": "^3.1.0",
++    "zod": "^4.4.3",
++    "jose": "^6.2.3"
++  },
++  "files": [
++    "locale/*.json",
++    "lib/index.js",
++    "lib/client.js",
++    "lib/types/**/*.js",
++    "lib/types/**/*.d.ts",
++    "lib/typert.host.js",
++    "lib/typert.host.d.ts",
++    "lib/typert.remote-client.js",
++    "lib/typert.remote-client.d.ts"
++  ]
++}
+diff --git a/packages/experimental/llm-chatgpt-browser/src/adapter.ts b/packages/experimental/llm-chatgpt-browser/src/adapter.ts
+new file mode 100644
+index 00000000..91e00f8f
+--- /dev/null
++++ b/packages/experimental/llm-chatgpt-browser/src/adapter.ts
+@@ -0,0 +1,170 @@
++import { createParser } from 'eventsource-parser'
++import { z } from 'zod'
++import { LlmAdapter, LlmError, ToolCallId } from '@deepseek-ai/dsh-llm'
++import type { ContentBlock, GenerateOptions, LlmResolvedModelInfo, StreamChunk } from '@deepseek-ai/dsh-llm'
++import type { ChatGPTAuth } from './auth.ts'
++
++const object = z.record(z.string(), z.unknown())
++const replay = z.object({ response: z.object({ format: z.literal('chatgpt-responses'), model: z.string() }),
++  blocks: z.array(z.object({ item: object })) })
++const itemSchema = z.discriminatedUnion('type', [
++  z.object({ type: z.literal('message'), content: z.array(z.object({ type: z.string(), text: z.string().optional(), refusal: z.string().optional() })) }).passthrough(),
++  z.object({ type: z.literal('reasoning'), summary: z.array(z.object({ text: z.string() })).default([]) }).passthrough(),
++  z.object({ type: z.literal('function_call'), call_id: z.string().min(1), name: z.string().min(1), arguments: z.string(), namespace: z.string().optional() }).passthrough(),
++])
++const usageSchema = z.object({ input_tokens: z.number(), output_tokens: z.number(), total_tokens: z.number().optional(),
++  input_tokens_details: z.object({ cached_tokens: z.number().optional() }).nullish(),
++  output_tokens_details: z.object({ reasoning_tokens: z.number().optional() }).nullish() })
++const eventSchema = z.object({
++  type: z.string(), output_index: z.number().int().nonnegative().optional(), delta: z.string().optional(),
++  item: object.optional(), response: z.object({ output: z.array(object).optional(), usage: usageSchema.nullish(),
++    error: z.object({ code: z.string() }).nullish() }).optional(),
++})
++
++function content(item: z.infer<typeof itemSchema>): ContentBlock {
++  switch (item.type) {
++    case 'message': return { type: 'text', text: item.content.map(part => part.text ?? part.refusal ?? '').join('') }
++    case 'reasoning': return { type: 'reasoning', text: item.summary.map(part => part.text).join('\n') }
++    case 'function_call':
++      if (item.namespace !== undefined && item.namespace !== 'dsh') throw new LlmError('Unknown tool namespace', 'INVALID_RESPONSE')
++      return { type: 'tool-call', id: ToolCallId(item.call_id), name: item.name, arguments: item.arguments }
++  }
++}
++
++/** Full history on every request; encrypted reasoning follows its retained block. */
++export function requestBody(options: GenerateOptions): unknown {
++  const input: Record<string, unknown>[] = []
++  for (const message of options.messages) {
++    if (message.content.some(block => !['text', 'reasoning', 'tool-call'].includes(block.type))) {
++      throw new LlmError('The ChatGPT browser adapter currently accepts text and tool results.', 'UNSUPPORTED_CONTENT')
++    }
++    const text = message.content.filter(block => block.type === 'text').map(block => block.text).join('\n')
++    if (message.role === 'tool') input.push({ type: 'function_call_output', call_id: message.toolCallId, output: text })
++    else if (message.role === 'assistant') {
++      const stored = replay.safeParse(message.source.replayState)
++      if (stored.success && stored.data.response.model === options.model && stored.data.blocks.length === message.content.length) {
++        input.push(...stored.data.blocks.map(block => block.item))
++      } else for (const block of message.content) {
++        if (block.type === 'text' && block.text) input.push({ role: 'assistant', content: block.text })
++        if (block.type === 'tool-call') input.push({ type: 'function_call', namespace: 'dsh', call_id: block.id, name: block.name, arguments: block.arguments })
++      }
++    } else input.push({ role: message.role === 'system' ? 'developer' : message.role, content: text })
++  }
++  return { model: options.model, store: false, stream: true, input,
++    ...options.system ? { instructions: options.system } : {},
++    include: ['reasoning.encrypted_content'],
++    ...options.tools?.length ? { tools: [{ type: 'namespace', name: 'dsh', description: 'Browser workspace tools',
++      tools: options.tools.map(tool => ({ type: 'function', name: tool.name, description: tool.description,
++        parameters: tool.parameters, strict: false })) }] } : {},
++  }
++}
++
++export class ChatGPTAdapter extends LlmAdapter {
++  constructor(private readonly auth: ChatGPTAuth) { super() }
++  override providerInfo(provider: string): { id: string; name: string } { return { id: provider, name: 'ChatGPT subscription' } }
++
++  override async listModels(provider: string): Promise<readonly LlmResolvedModelInfo[]> {
++    if (!(await this.auth.status()).connected) return []
++    const token = await this.auth.accessToken()
++    const response = await this.auth.request('models', { headers: { authorization: `Bearer ${token}` } })
++    if (!response.ok) { await response.body?.cancel(); throw new LlmError(`ChatGPT models returned HTTP ${response.status}. Sign in again.`, 'CATALOG_ERROR') }
++    const catalog = z.object({ models: z.array(z.object({
++      slug: z.string(), display_name: z.string(), visibility: z.string(), context_window: z.number().positive().optional(),
++    })) }).parse(await response.json())
++    return catalog.models.filter(model => model.visibility === 'list').map(model => ({
++      provider, id: model.slug, name: model.display_name, inputModalities: ['text'] as const,
++      description: 'Uses your ChatGPT plan allowance',
++      ...model.context_window === undefined ? {} : { context: { contextWindow: model.context_window } },
++    }))
++  }
++
++  override async resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo> {
++    const found = (await this.listModels(provider)).find(item => item.id === model)
++    if (!found) throw new LlmError('This model is not in the signed-in ChatGPT account’s catalog.', 'MODEL_NOT_FOUND')
++    return found
++  }
++
++  override async* stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
++    const controller = new AbortController()
++    const signal = AbortSignal.any([controller.signal, ...options.signal ? [options.signal] : []])
++    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
++    try {
++      const token = await this.auth.accessToken()
++      const response = await this.auth.request('responses', {
++        method: 'POST', signal, headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
++        body: JSON.stringify(requestBody(options)),
++      })
++      if (!response.ok) { await response.body?.cancel(); throw new LlmError(`ChatGPT returned HTTP ${response.status}. Check your sign-in and plan usage.`, 'PROVIDER_ERROR') }
++      if (!response.body || !response.headers.get('content-type')?.includes('text/event-stream')) {
++        await response.body?.cancel(); throw new LlmError('ChatGPT did not return an event stream.', 'INVALID_RESPONSE')
++      }
++      reader = response.body.getReader()
++      const events: string[] = []
++      const parser = createParser({ onEvent: event => events.push(event.data) })
++      const decoder = new TextDecoder()
++      const blocks: ContentBlock[] = []
++      const slots = new Map<number, number>()
++      const items = new Map<number, Record<string, unknown>>()
++      let completed = false
++      while (!completed) {
++        const read = await reader.read()
++        parser.feed(decoder.decode(read.value, { stream: !read.done }))
++        if (read.done) parser.reset({ consume: true })
++        for (const raw of events.splice(0)) {
++          if (raw === '[DONE]') continue
++          const event = eventSchema.parse(JSON.parse(raw))
++          if (['response.failed', 'response.incomplete', 'error'].includes(event.type)) {
++            throw new LlmError(`ChatGPT response failed (${event.response?.error?.code ?? event.type}). Check ChatGPT usage or retry.`, 'PROVIDER_ERROR')
++          }
++          const output = event.output_index
++          if (output !== undefined && event.type === 'response.output_item.added' && event.item) {
++            const block = content(itemSchema.parse(event.item))
++            const index = blocks.length
++            slots.set(output, index); blocks.push(block)
++            yield { type: 'block-start', index, blockType: block.type }
++            if (block.type === 'tool-call') yield { type: 'tool-call-delta', index, id: block.id, name: block.name, argumentsDelta: block.arguments }
++          }
++          const index = output === undefined ? undefined : slots.get(output)
++          const block = index === undefined ? undefined : blocks[index]
++          if (index !== undefined && event.delta && block) {
++            if (event.type === 'response.output_text.delta' && block.type === 'text') {
++              block.text += event.delta; yield { type: 'text-delta', index, text: event.delta }
++            } else if (event.type === 'response.reasoning_summary_text.delta' && block.type === 'reasoning') {
++              block.text += event.delta; yield { type: 'reasoning-delta', index, text: event.delta }
++            } else if (event.type === 'response.function_call_arguments.delta' && block.type === 'tool-call') {
++              block.arguments += event.delta; yield { type: 'tool-call-delta', index, id: block.id, argumentsDelta: event.delta }
++            }
++          }
++          if (output !== undefined && event.type === 'response.output_item.done' && event.item) items.set(output, event.item)
++          if (event.type === 'response.completed') {
++            completed = true
++            for (const [output, item] of (event.response?.output ?? []).entries()) items.set(output, item)
++            const metadata: { item: Record<string, unknown> }[] = []
++            for (const [output, index] of slots) {
++              const item = items.get(output)
++              if (!item) throw new LlmError('ChatGPT omitted a completed output item.', 'INVALID_RESPONSE')
++              const final = content(itemSchema.parse(item)); blocks[index] = final
++              metadata[index] = { item }
++              yield { type: 'block-end', index, block: final }
++            }
++            const usage = event.response?.usage
++            if (usage) {
++              const cached = usage.input_tokens_details?.cached_tokens ?? 0
++              yield { type: 'usage', usage: { inputTokens: Math.max(0, usage.input_tokens - cached), outputTokens: usage.output_tokens,
++                cacheReadTokens: cached, ...usage.total_tokens === undefined ? {} : { totalTokens: usage.total_tokens },
++                ...usage.output_tokens_details?.reasoning_tokens === undefined ? {} : { reasoningTokens: usage.output_tokens_details.reasoning_tokens } } }
++            }
++            yield { type: 'finish', reason: { kind: blocks.some(block => block.type === 'tool-call') ? 'tool-calls' : 'stop' },
++              replayState: { response: { format: 'chatgpt-responses', model: options.model }, blocks: metadata } }
++            break
++          }
++        }
++        if (read.done) break
++      }
++      if (!completed) throw new LlmError('ChatGPT stream ended before response.completed.', 'TRUNCATED_STREAM')
++    } finally {
++      controller.abort()
++      if (reader) { await reader.cancel().catch(() => {}); reader.releaseLock() }
++    }
++  }
++}
+diff --git a/packages/experimental/llm-chatgpt-browser/src/auth.ts b/packages/experimental/llm-chatgpt-browser/src/auth.ts
+new file mode 100644
+index 00000000..611bc853
+--- /dev/null
++++ b/packages/experimental/llm-chatgpt-browser/src/auth.ts
+@@ -0,0 +1,173 @@
++import type { Context } from '@deepseek-ai/cordis'
++import { credentialKey } from '@deepseek-ai/dsh-credentials'
++import { createLocalJWKSet, jwtVerify } from 'jose'
++import { z } from 'zod'
++
++const key = credentialKey('llm-chatgpt-browser', 'chatgpt')
++const callback = 'http://127.0.0.1:1455/auth/callback'
++const resource = 'https://api.openai.com/v1'
++const scope = 'openid profile email offline_access resource.invoke chatgpt.tokens.use.direct'
++const grantSchema = z.object({
++  access: z.string(), refresh: z.string(), id: z.string(), clientId: z.string(), subject: z.string(),
++  email: z.string(), expires: z.number(), scope: z.string(), hostId: z.string(),
++})
++type Grant = z.infer<typeof grantSchema>
++const tokenSchema = z.object({
++  access_token: z.string().min(1), refresh_token: z.string().min(1).optional(), id_token: z.string().min(1).optional(),
++  token_type: z.string().regex(/^bearer$/i), expires_in: z.number().positive(), scope: z.string().optional(),
++})
++const encode = (bytes: Uint8Array): string => btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
++const random = (): string => encode(crypto.getRandomValues(new Uint8Array(32)))
++
++/** Owns one disposable browser account. Secrets stay in the credential service. */
++export class ChatGPTAuth {
++  private pending: { state: string; nonce: string; verifier: string; hostId: string; clientId: string;
++    controller: AbortController; expires: number; consumed: boolean } | undefined
++  private registration: Pick<Grant, 'clientId' | 'subject' | 'email' | 'hostId'> | undefined
++  private account = new AbortController()
++
++  constructor(private readonly ctx: Context, private readonly lifetime: AbortSignal) {}
++
++  async request(route: string, init: RequestInit = {}): Promise<Response> {
++    return await fetch(`${globalThis.location.origin}/openai/${route}`, {
++      ...init, headers: { ...Object.fromEntries(new Headers(init.headers)), 'x-dsh-fetch': '1' },
++      signal: AbortSignal.any([this.lifetime, ...route === 'revoke' ? [] : [this.account.signal], AbortSignal.timeout(300000), ...init.signal ? [init.signal] : []]),
++      credentials: 'omit', cache: 'no-store', redirect: 'error',
++    })
++  }
++
++  async status(): Promise<{ connected: boolean; email: string }> {
++    const record = await this.ctx.credentials.readRecord(key)
++    const grant = record?.kind === 'grant' ? grantSchema.parse(record.payload) : undefined
++    return { connected: grant !== undefined, email: grant?.email ?? '' }
++  }
++
++  async begin(hostId: string): Promise<string> {
++    if (!/^urn:uuid:[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(hostId)) {
++      throw new Error('Invalid browser installation identifier')
++    }
++    this.cancel()
++    const pending = { state: random(), nonce: random(), verifier: random(), hostId,
++      clientId: this.registration?.clientId ?? 'dynamic_agent_client', controller: new AbortController(),
++      expires: Date.now() + 10 * 60_000, consumed: false }
++    this.pending = pending
++    const challenge = encode(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(pending.verifier))))
++    pending.controller.signal.throwIfAborted()
++    const url = new URL('https://auth.openai.com/api/accounts/authorize')
++    url.search = new URLSearchParams({
++      client_id: pending.clientId, ext_agent_host_id: this.registration?.hostId ?? hostId,
++      ...pending.clientId === 'dynamic_agent_client' ? { agent_name_hint: 'DSH Flare' } : {},
++      response_type: 'code', redirect_uri: callback, resource, scope,
++      state: pending.state, nonce: pending.nonce, code_challenge: challenge, code_challenge_method: 'S256',
++    }).toString()
++    return url.href
++  }
++
++  cancel(): void { this.pending?.controller.abort(); this.pending = undefined }
++
++  private async tokens(body: URLSearchParams, signal: AbortSignal) {
++    const response = await this.request('token', {
++      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body,
++      signal: AbortSignal.any([signal, AbortSignal.timeout(30000)]),
++    })
++    if (!response.ok) { await response.body?.cancel(); throw new Error(`ChatGPT authorization returned HTTP ${response.status}. Start sign-in again.`) }
++    return tokenSchema.parse(await response.json())
++  }
++
++  private async identity(id: string, clientId: string, signal: AbortSignal, nonce?: string) {
++    const response = await this.request('jwks', { signal })
++    if (!response.ok) { await response.body?.cancel(); throw new Error('Could not verify ChatGPT sign-in') }
++    const { payload } = await jwtVerify(id, createLocalJWKSet(await response.json()), {
++      issuer: 'https://auth.openai.com', audience: clientId, requiredClaims: ['exp', 'sub'], algorithms: ['RS256'],
++    })
++    if (!payload.sub || (nonce !== undefined && payload.nonce !== nonce)) throw new Error('ChatGPT sign-in identity did not match')
++    return { subject: payload.sub, email: typeof payload.email === 'string' ? payload.email : payload.sub }
++  }
++
++  async complete(input: string): Promise<void> {
++    const pending = this.pending
++    if (!pending || pending.consumed || Date.now() >= pending.expires) throw new Error('Sign-in expired. Start again.')
++    pending.consumed = true
++    try {
++      let url: URL
++      try { url = new URL(input.trim()) } catch { throw new Error('Paste the full localhost callback URL') }
++      if (url.origin + url.pathname !== callback || url.hash || url.username || url.password
++        || url.searchParams.getAll('state').length !== 1 || url.searchParams.get('state') !== pending.state) {
++        throw new Error('This callback does not match the current sign-in. Start again.')
++      }
++      if (url.searchParams.has('error')) throw new Error('ChatGPT sign-in was declined. Start again to allow access.')
++      const code = url.searchParams.get('code')
++      const clientId = url.searchParams.get('client_id') ?? pending.clientId
++      if (!code || url.searchParams.getAll('code').length !== 1 || !clientId || clientId === 'dynamic_agent_client'
++        || url.searchParams.getAll('client_id').length > 1
++        || (pending.clientId !== 'dynamic_agent_client' && clientId !== pending.clientId)) {
++        throw new Error('The callback is missing a valid authorization code or client ID')
++      }
++      const token = await this.tokens(new URLSearchParams({
++        grant_type: 'authorization_code', client_id: clientId, code, code_verifier: pending.verifier,
++        redirect_uri: callback, resource,
++      }), pending.controller.signal)
++      if (!token.id_token || !token.refresh_token || !token.scope?.split(/\s+/).includes('chatgpt.tokens.use.direct')) {
++        throw new Error('Enable ChatGPT plan usage when approving this app, then sign in again')
++      }
++      const identity = await this.identity(token.id_token, clientId, pending.controller.signal, pending.nonce)
++      if (this.registration && identity.subject !== this.registration.subject) throw new Error('Sign in to the previously selected ChatGPT account')
++      const grant: Grant = { ...identity, clientId, access: token.access_token, refresh: token.refresh_token,
++        id: token.id_token, scope: token.scope, expires: Date.now() + token.expires_in * 1000,
++        hostId: this.registration?.hostId ?? pending.hostId }
++      await this.ctx.credentials.modifyRecord(key, async () => {
++        pending.controller.signal.throwIfAborted()
++        this.lifetime.throwIfAborted()
++        return { kind: 'grant', payload: grant }
++      })
++      this.registration = { clientId, ...identity, hostId: grant.hostId }
++    } finally {
++      if (this.pending === pending) this.pending = undefined
++    }
++  }
++
++  async accessToken(): Promise<string> {
++    const record = await this.ctx.credentials.modifyRecord(key, async current => {
++      if (current?.kind !== 'grant') throw new Error('Continue with ChatGPT in Settings → ChatGPT first')
++      const grant = grantSchema.parse(current.payload)
++      if (grant.expires > Date.now() + 60000) return undefined
++      const token = await this.tokens(new URLSearchParams({
++        grant_type: 'refresh_token', client_id: grant.clientId, refresh_token: grant.refresh, resource,
++      }), this.account.signal)
++      const granted = token.scope ?? grant.scope
++      if (!granted.split(/\s+/).includes('chatgpt.tokens.use.direct')) throw new Error('ChatGPT plan permission is no longer available. Sign in again.')
++      if (token.id_token) {
++        const identity = await this.identity(token.id_token, grant.clientId, this.account.signal)
++        if (identity.subject !== grant.subject) throw new Error('Refreshed ChatGPT identity did not match')
++      }
++      this.account.signal.throwIfAborted()
++      return { kind: 'grant', payload: { ...grant, access: token.access_token,
++        refresh: token.refresh_token ?? grant.refresh, id: token.id_token ?? grant.id, scope: granted,
++        expires: Date.now() + token.expires_in * 1000 } }
++    })
++    if (record?.kind !== 'grant') throw new Error('Sign in with ChatGPT first')
++    return grantSchema.parse(record.payload).access
++  }
++
++  async signOut(): Promise<boolean> {
++    this.cancel()
++    this.account.abort()
++    // Await any rotating-token write before revoking the newest refresh token.
++    const record = await this.ctx.credentials.modifyRecord(key, async () => undefined)
++    let revoked = true
++    try {
++      if (record?.kind === 'grant') {
++        const grant = grantSchema.parse(record.payload)
++        const response = await this.request('revoke', {
++          method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
++          body: new URLSearchParams({ token: grant.refresh, token_type_hint: 'refresh_token', client_id: grant.clientId }),
++          signal: AbortSignal.timeout(10000),
++        })
++        revoked = response.ok
++        await response.body?.cancel()
++      }
++    } catch { revoked = false }
++    finally { await this.ctx.credentials.deleteRecord(key); this.account = new AbortController() }
++    return revoked
++  }
++}
+diff --git a/packages/experimental/llm-chatgpt-browser/src/client/index.ts b/packages/experimental/llm-chatgpt-browser/src/client/index.ts
+new file mode 100644
+index 00000000..5edced9e
+--- /dev/null
++++ b/packages/experimental/llm-chatgpt-browser/src/client/index.ts
+@@ -0,0 +1,74 @@
++import { createElement, useEffect, useState } from 'react'
++import type { FormEvent } from 'react'
++import { Button, Input } from '@deepseek-ai/dsh-client-ui-primitives'
++import type { Context } from '@deepseek-ai/cordis'
++import type {} from '@deepseek-ai/dsh-api-remotes/client'
++import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
++import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
++import chatgptRemote from '@deepseek-ai/dsh-experimental-llm-chatgpt-browser/remote'
++
++export const inject = ['slots', 'remote']
++
++export async function apply(ctx: Context): Promise<void> {
++  const unmount = await ctx.remote.$mount(chatgptRemote)
++  ctx.effect(() => unmount)
++  ctx.inject(['remote.chatgpt'], mountAccount)
++}
++
++function mountAccount(ctx: Context): void {
++  // Only the opaque installation ID persists; account credentials stay in Worker memory.
++  let hostId = `urn:uuid:${crypto.randomUUID()}`
++  try {
++    hostId = localStorage.getItem('dsh.chatgpt.host') ?? hostId
++    localStorage.setItem('dsh.chatgpt.host', hostId)
++  } catch { /* Private browsers may deny persistent storage. */ }
++  const h = createElement
++  const value = <T>(result: { ok: true; value: T } | { ok: false; error: { message: string } }): T => {
++    if (!result.ok) throw new Error(result.error.message)
++    return result.value
++  }
++  function Account() {
++    const [email, setEmail] = useState('')
++    const [url, setUrl] = useState('')
++    const [callback, setCallback] = useState('')
++    const [busy, setBusy] = useState(false)
++    const [notice, setNotice] = useState('')
++    const status = async () => { const state = value(await ctx.remote.chatgpt.status()); setEmail(state.connected ? state.email : '') }
++    useEffect(() => { void status().catch(() => setNotice('Could not read ChatGPT connection')) }, [])
++    const run = async (task: () => Promise<void>) => {
++      setBusy(true); setNotice('')
++      try { await task() } catch (error) { setNotice(error instanceof Error ? error.message : 'ChatGPT sign-in failed') }
++      finally { setBusy(false) }
++    }
++    return h('section', { style: { padding: 24, maxWidth: 600, display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 12 } },
++      h('h2', null, 'ChatGPT'),
++      h('p', null, email || 'Use your ChatGPT subscription. This connection lasts until you reload or close this page.'),
++      h(Button, { variant: 'primary', disabled: busy, onClick: () => void run(async () => {
++        setCallback(''); setUrl(value(await ctx.remote.chatgpt.begin(hostId)))
++      }) }, 'Continue with ChatGPT'),
++      url && h('form', { style: { display: 'grid', gap: 12, width: '100%' }, onSubmit: (event: FormEvent<HTMLFormElement>) => {
++        event.preventDefault()
++        const pasted = callback; setCallback(''); setUrl('')
++        void run(async () => { value(await ctx.remote.chatgpt.complete(pasted)); await status() })
++      } },
++      h('p', null, h('a', { href: url, target: '_blank', rel: 'noopener noreferrer' }, 'Open ChatGPT sign-in')),
++      h('p', null, 'After signing in, the localhost page may fail to load. Copy its full address and paste it here.'),
++      h(Input, { type: 'password', autoComplete: 'off', spellCheck: false, 'aria-label': 'Callback URL',
++        placeholder: 'http://127.0.0.1:1455/auth/callback?…', value: callback,
++        onChange: (event) => setCallback(event.currentTarget.value), style: { width: '100%', padding: 8 } }),
++      h(Button, { variant: 'primary', type: 'submit', disabled: busy || !callback.trim() }, 'Connect'),
++      h(Button, { type: 'button', disabled: busy, onClick: () => {
++        setUrl(''); setCallback(''); void run(async () => { value(await ctx.remote.chatgpt.cancel()) })
++      } }, 'Cancel')),
++      email && h(Button, { disabled: busy, onClick: () => void run(async () => {
++        const revoked = value(await ctx.remote.chatgpt.signOut()); setEmail(''); setUrl(''); setCallback('')
++        if (!revoked) setNotice('Signed out locally. Disconnect DSH Flare in ChatGPT Settings to revoke the remote session.')
++      }) }, 'Sign out'),
++      notice && h('p', { role: 'alert' }, notice),
++      h('p', null, h('a', { href: 'https://chatgpt.com/settings/usage', target: '_blank', rel: 'noopener noreferrer' }, 'ChatGPT usage and app access')),
++    )
++  }
++  ctx.slots.inject('settings.section', () => ctx.slots.register({
++    name: 'settings.section', id: 'chatgpt', order: 15, label: () => 'ChatGPT',
++  }, Account))
++}
+diff --git a/packages/experimental/llm-chatgpt-browser/src/index.ts b/packages/experimental/llm-chatgpt-browser/src/index.ts
+new file mode 100644
+index 00000000..81986019
+--- /dev/null
++++ b/packages/experimental/llm-chatgpt-browser/src/index.ts
+@@ -0,0 +1,28 @@
++import { Context } from '@deepseek-ai/cordis'
++import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
++import { ChatGPTAuth } from './auth.ts'
++import { ChatGPTAdapter } from './adapter.ts'
++
++/** Browser account operations; the Remote response never contains credentials. */
++export default class ChatGPTBrowser extends TypertRemoteService {
++  static inject = ['llm', 'credentials']
++  private readonly auth: ChatGPTAuth
++  constructor(ctx: Context) {
++    super(ctx, 'chatgpt', { namespace: 'chatgpt' })
++    const lifetime = new AbortController()
++    this.auth = new ChatGPTAuth(ctx, lifetime.signal)
++    ctx.effect(() => () => { lifetime.abort(); this.auth.cancel() })
++    ctx.llm.registerAdapter(['chatgpt'], new ChatGPTAdapter(this.auth))
++  }
++
++  @Remote
++  async status(): Promise<{ connected: boolean; email: string }> { return await this.auth.status() }
++  @Remote
++  async begin(hostId: string): Promise<string> { return await this.auth.begin(hostId) }
++  @Remote
++  async complete(callback: string): Promise<void> { await this.auth.complete(callback) }
++  @Remote
++  async cancel(): Promise<void> { this.auth.cancel() }
++  @Remote
++  async signOut(): Promise<boolean> { return await this.auth.signOut() }
++}
+diff --git a/packages/experimental/llm-chatgpt-browser/tests/browser.spec.ts b/packages/experimental/llm-chatgpt-browser/tests/browser.spec.ts
+new file mode 100644
+index 00000000..3d2cd6fe
+--- /dev/null
++++ b/packages/experimental/llm-chatgpt-browser/tests/browser.spec.ts
+@@ -0,0 +1,191 @@
++import { afterEach, beforeEach, expect, it, vi } from 'vitest'
++import { Context } from '@deepseek-ai/cordis'
++import { credentialKey } from '@deepseek-ai/dsh-credentials'
++import { exportJWK, generateKeyPair, SignJWT } from 'jose'
++import MemoryCredentials from '../../credentials-memory/src/index.ts'
++import { ChatGPTAuth } from '../src/auth.ts'
++import { ChatGPTAdapter, requestBody } from '../src/adapter.ts'
++import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
++
++let ctx: Context
++let auth: ChatGPTAuth
++let lifetime: AbortController
++const host = `urn:uuid:${crypto.randomUUID()}`
++const key = credentialKey('llm-chatgpt-browser', 'chatgpt')
++const options: GenerateOptions = { provider: 'chatgpt', model: 'test-model', messages: [] }
++let requests: { route: string; init: RequestInit }[]
++let signIn: URL
++let claims: Record<string, unknown>
++let expires: number
++let extraScopes: string
++let refreshes: number
++let respond: () => Response
++let tamperSignature: boolean
++
++beforeEach(async () => {
++  ctx = new Context()
++  await ctx.plugin(MemoryCredentials)
++  lifetime = new AbortController()
++  auth = new ChatGPTAuth(ctx, lifetime.signal)
++  requests = []; claims = {}; expires = 3600; extraScopes = 'chatgpt.tokens.use.direct'; refreshes = 0
++  tamperSignature = false
++  respond = () => new Response('unused', { status: 500 })
++  vi.stubGlobal('location', { origin: 'https://flare.example' })
++  const { publicKey, privateKey } = await generateKeyPair('RS256')
++  const jwk = await exportJWK(publicKey)
++  vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit = {}) => {
++    init.signal?.throwIfAborted()
++    const route = new URL(url).pathname
++    requests.push({ route, init })
++    if (route === '/openai/jwks') return Response.json({ keys: [{ ...jwk, kid: 'test', alg: 'RS256', use: 'sig' }] })
++    if (route === '/openai/token') {
++      const form = new URLSearchParams(String(init.body))
++      const refresh = form.get('grant_type') === 'refresh_token'
++      if (refresh) refreshes++
++      else expect(form.get('code_verifier')).toHaveLength(43)
++      const id = await new SignJWT({ nonce: signIn.searchParams.get('nonce'), email: 'test@example.com', ...claims })
++        .setProtectedHeader({ alg: 'RS256', kid: 'test' }).setIssuer('https://auth.openai.com')
++        .setAudience('oaiapp_test').setSubject('user-test').setExpirationTime('1h').sign(privateKey)
++      return Response.json({ access_token: refresh ? 'new-access' : 'test-access', refresh_token: refresh ? 'new-refresh' : 'test-refresh',
++        id_token: tamperSignature ? id.slice(0, id.lastIndexOf('.') + 1) + 'invalid' : id,
++        token_type: 'Bearer', expires_in: refresh ? 3600 : expires, scope: extraScopes })
++    }
++    if (route === '/openai/revoke') return new Response('')
++    if (route === '/openai/models') return Response.json({ models: [
++      { slug: 'hidden', display_name: 'Hidden', visibility: 'hidden' },
++      { slug: 'test-model', display_name: 'Test model', visibility: 'list', context_window: 128000 },
++    ] })
++    if (route === '/openai/responses') return respond()
++    throw new Error(`Unexpected mock route ${route}`)
++  }))
++})
++afterEach(async () => { try { lifetime.abort(); auth.cancel(); await ctx.fiber.dispose() } finally { vi.unstubAllGlobals() } })
++
++async function callback(): Promise<URL> {
++  signIn = new URL(await auth.begin(host))
++  return new URL(`http://127.0.0.1:1455/auth/callback?${new URLSearchParams({ code: 'one-use-code', state: signIn.searchParams.get('state')!, client_id: 'oaiapp_test' })}`)
++}
++async function connect(): Promise<void> { await auth.complete((await callback()).href) }
++async function collect(): Promise<StreamChunk[]> {
++  const chunks: StreamChunk[] = []
++  for await (const chunk of new ChatGPTAdapter(auth).stream(options)) chunks.push(chunk)
++  return chunks
++}
++function sse(events: object[]): Response {
++  return new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(''), { headers: { 'content-type': 'text/event-stream' } })
++}
++
++it('uses PKCE, validates identity, keeps tokens out of public status, and consumes callbacks once', async () => {
++  const url = await callback()
++  expect(signIn.searchParams.get('agent_name_hint')).toBe('DSH Flare')
++  expect(signIn.searchParams.get('code_challenge_method')).toBe('S256')
++  await auth.complete(url.href)
++  const tokenRequest = requests.find(request => request.route === '/openai/token')!
++  const verifier = new URLSearchParams(String(tokenRequest.init.body)).get('code_verifier')!
++  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)))
++  expect(Buffer.from(digest).toString('base64url')).toBe(signIn.searchParams.get('code_challenge'))
++  expect(await auth.status()).toEqual({ connected: true, email: 'test@example.com' })
++  expect(await auth.accessToken()).toBe('test-access')
++  await expect(auth.complete(url.href)).rejects.toThrow('expired')
++  expect(requests.filter(request => request.route === '/openai/token')).toHaveLength(1)
++})
++
++it.each(['state', 'origin', 'client_id', 'duplicate'])('rejects a forged %s before exchanging a code', async field => {
++  const url = await callback()
++  if (field === 'state') url.searchParams.set('state', 'wrong')
++  if (field === 'origin') url.hostname = 'example.com'
++  if (field === 'client_id') url.searchParams.delete('client_id')
++  if (field === 'duplicate') url.searchParams.append('code', 'other')
++  await expect(auth.complete(url.href)).rejects.toThrow()
++  expect(requests).toHaveLength(0)
++  expect((await auth.status()).connected).toBe(false)
++})
++
++it('rejects an ID token with the wrong nonce without saving credentials', async () => {
++  claims = { nonce: 'wrong' }
++  await expect(connect()).rejects.toThrow('identity')
++  expect((await auth.status()).connected).toBe(false)
++})
++
++it('rejects identity-only authorization', async () => {
++  extraScopes = 'openid email'
++  await expect(connect()).rejects.toThrow('plan usage')
++  expect((await auth.status()).connected).toBe(false)
++})
++
++it('rejects an invalid ID-token signature', async () => {
++  tamperSignature = true
++  await expect(connect()).rejects.toThrow()
++  expect((await auth.status()).connected).toBe(false)
++})
++
++it('cannot commit a grant after cancellation during verification', async () => {
++  const url = await callback()
++  const fetchToken = globalThis.fetch
++  vi.stubGlobal('fetch', vi.fn(async (...args: Parameters<typeof fetch>) => {
++    const response = await fetchToken(...args)
++    if (String(args[0]).endsWith('/jwks')) auth.cancel()
++    return response
++  }))
++  await expect(auth.complete(url.href)).rejects.toThrow()
++  expect((await auth.status()).connected).toBe(false)
++})
++
++it('withdraws a cancelled attempt and supersedes older attempts', async () => {
++  const first = await callback()
++  auth.cancel()
++  await expect(auth.complete(first.href)).rejects.toThrow('expired')
++  await callback()
++  await expect(auth.complete(first.href)).rejects.toThrow('match')
++  expect(requests).toHaveLength(0)
++})
++
++it('serializes refresh and revokes the rotated refresh token on sign-out', async () => {
++  expires = 1
++  await connect()
++  expect(await Promise.all([auth.accessToken(), auth.accessToken(), auth.accessToken()])).toEqual(['new-access', 'new-access', 'new-access'])
++  expect(refreshes).toBe(1)
++  expect(await auth.signOut()).toBe(true)
++  const revoked = requests.find(request => request.route === '/openai/revoke')!
++  expect(new URLSearchParams(String(revoked.init.body)).get('token')).toBe('new-refresh')
++  expect(await ctx.credentials.readRecord(key)).toBeUndefined()
++  const returning = new URL(await auth.begin(host))
++  expect(returning.searchParams.get('client_id')).toBe('oaiapp_test')
++  expect(returning.searchParams.has('agent_name_hint')).toBe(false)
++})
++
++it('only lists models visible to the signed-in account', async () => {
++  const adapter = new ChatGPTAdapter(auth)
++  expect(await adapter.listModels('chatgpt')).toEqual([])
++  await connect()
++  expect((await adapter.listModels('chatgpt')).map(model => model.id)).toEqual(['test-model'])
++})
++
++it('omits unsupported parameters and groups tools in a namespace', () => {
++  const body = requestBody({ ...options, system: 'Be helpful', maxTokens: 100, temperature: 0.5,
++    tools: [{ name: 'read', description: 'Read a file', parameters: { type: 'object', properties: {} } }] })
++  expect(body).toMatchObject({ stream: true, store: false, instructions: 'Be helpful', tools: [{ type: 'namespace', name: 'dsh' }] })
++  expect(body).not.toHaveProperty('temperature')
++  expect(body).not.toHaveProperty('max_output_tokens')
++})
++
++it('streams namespaced tool calls, reports usage, and preserves completed replay items', async () => {
++  await connect()
++  const item = { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'read', namespace: 'dsh', arguments: '{"path":"README"}' }
++  respond = () => sse([
++    { type: 'response.output_item.added', output_index: 0, item: { ...item, arguments: '' } },
++    { type: 'response.function_call_arguments.delta', output_index: 0, delta: item.arguments },
++    { type: 'response.output_item.done', output_index: 0, item },
++    { type: 'response.completed', response: { output: [item], usage: { input_tokens: 10, output_tokens: 3, input_tokens_details: { cached_tokens: 4 } } } },
++  ])
++  const chunks = await collect()
++  expect(chunks).toContainEqual({ type: 'tool-call-delta', index: 0, id: 'call_1', argumentsDelta: item.arguments })
++  expect(chunks).toContainEqual({ type: 'usage', usage: { inputTokens: 6, outputTokens: 3, cacheReadTokens: 4 } })
++  expect(chunks.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'tool-calls' }, replayState: { blocks: [{ item }] } })
++})
++
++it.each(['truncated', 'response.failed', 'response.incomplete'])('does not report success for %s streams', async event => {
++  await connect()
++  respond = () => sse(event === 'truncated' ? [] : [{ type: event, response: { error: { code: 'subscription_sharing_usage_limit_exceeded' } } }])
++  await expect(collect()).rejects.toThrow()
++})
+diff --git a/packages/experimental/llm-chatgpt-browser/tsconfig.client.json b/packages/experimental/llm-chatgpt-browser/tsconfig.client.json
+new file mode 100644
+index 00000000..03fa2970
+--- /dev/null
++++ b/packages/experimental/llm-chatgpt-browser/tsconfig.client.json
+@@ -0,0 +1,31 @@
++{
++  "extends": "../../../tsconfig.base.client.json",
++  "compilerOptions": {
++    "rootDir": "src",
++    "outDir": "lib/types",
++    "tsBuildInfoFile": "lib/tsconfig.client.tsbuildinfo"
++  },
++  "include": [
++    "src/client"
++  ],
++  "references": [
++    {
++      "path": "../../../vendor/cordis"
++    },
++    {
++      "path": "../../api/remotes/tsconfig.client.json"
++    },
++    {
++      "path": "../../client/ui-settings/tsconfig.client.json"
++    },
++    {
++      "path": "../../client/ui-renderer"
++    },
++    {
++      "path": "../../client/ui-slots"
++    },
++    {
++      "path": "../../client/ui-primitives"
++    }
++  ]
++}
+diff --git a/packages/experimental/llm-chatgpt-browser/tsconfig.host.json b/packages/experimental/llm-chatgpt-browser/tsconfig.host.json
+new file mode 100644
+index 00000000..330c34fc
+--- /dev/null
++++ b/packages/experimental/llm-chatgpt-browser/tsconfig.host.json
+@@ -0,0 +1,25 @@
++{
++  "extends": "../../../tsconfig.base.json",
++  "compilerOptions": {
++    "rootDir": "src",
++    "outDir": "lib/types",
++    "tsBuildInfoFile": "lib/tsconfig.host.tsbuildinfo"
++  },
++  "include": [
++    "src/*.ts"
++  ],
++  "references": [
++    {
++      "path": "../../../vendor/cordis"
++    },
++    {
++      "path": "../../llm/llm"
++    },
++    {
++      "path": "../../credentials/credentials"
++    },
++    {
++      "path": "../../typert/protocol"
++    }
++  ]
++}
+diff --git a/packages/experimental/llm-chatgpt-browser/tsconfig.json b/packages/experimental/llm-chatgpt-browser/tsconfig.json
+new file mode 100644
+index 00000000..56b9d31f
+--- /dev/null
++++ b/packages/experimental/llm-chatgpt-browser/tsconfig.json
+@@ -0,0 +1 @@
++{"files":[],"references":[{"path":"./tsconfig.host.json"},{"path":"./tsconfig.client.json"}]}
+diff --git a/packages/experimental/llm-chatgpt-browser/tsdown.config.ts b/packages/experimental/llm-chatgpt-browser/tsdown.config.ts
+new file mode 100644
+index 00000000..db86b5c5
+--- /dev/null
++++ b/packages/experimental/llm-chatgpt-browser/tsdown.config.ts
+@@ -0,0 +1,2 @@
++import { clientBundle } from '../../client/tsdown.client.ts'
++export default clientBundle(import.meta.dirname, ['lib/types/index.js'], { hostPhase: true })
 diff --git a/packages/experimental/llm-openrouter-browser/locale/en.json b/packages/experimental/llm-openrouter-browser/locale/en.json
 new file mode 100644
 index 00000000..67ce44c0
@@ -731,8 +1602,266 @@ index 00000000..7c3daf73
 +    }
 +  ]
 +}
+diff --git a/packages/experimental/webworker-runtime/package.json b/packages/experimental/webworker-runtime/package.json
+index d9aae055..952af5dd 100644
+--- a/packages/experimental/webworker-runtime/package.json
++++ b/packages/experimental/webworker-runtime/package.json
+@@ -30,0 +31 @@
++    "@deepseek-ai/dsh-client-web": "workspace:*",
+@@ -35,0 +37 @@
++    "isomorphic-git": "1.44.4",
+@@ -38 +39,0 @@
+-    "@deepseek-ai/dsh-client-web": "workspace:*",
+@@ -61 +61,0 @@
+-    "@deepseek-ai/dsh-session-projection": "workspace:*",
+@@ -62,0 +63 @@
++    "@deepseek-ai/dsh-session-projection": "workspace:*",
+diff --git a/packages/experimental/webworker-runtime/src/shell/fs-access.ts b/packages/experimental/webworker-runtime/src/shell/fs-access.ts
+index 9099c435..965ccf6d 100644
+--- a/packages/experimental/webworker-runtime/src/shell/fs-access.ts
++++ b/packages/experimental/webworker-runtime/src/shell/fs-access.ts
+@@ -103,0 +104,2 @@ export function hostFileSystem(): ShellFileSystem {
++    readBytes: async (path: string): Promise<Uint8Array> => vfs().readFileSync(path) as Uint8Array,
++    writeBytes: async (path: string, data: Uint8Array): Promise<void> => { vfs().writeFileSync(path, data) },
+diff --git a/packages/experimental/webworker-runtime/src/shell/process/child.ts b/packages/experimental/webworker-runtime/src/shell/process/child.ts
+index ad3250e2..f3f2c1e0 100644
+--- a/packages/experimental/webworker-runtime/src/shell/process/child.ts
++++ b/packages/experimental/webworker-runtime/src/shell/process/child.ts
+@@ -63,0 +64,2 @@ export function runShellProcess(start: ShellStartFrame, scope: ProcessScope): vo
++    readBytes: async (path: string) => await call('readBytes', [path]) as Uint8Array,
++    writeBytes: async (path: string, data: Uint8Array) => { await call('writeBytes', [path, data]) },
+diff --git a/packages/experimental/webworker-runtime/src/shell/process/host.ts b/packages/experimental/webworker-runtime/src/shell/process/host.ts
+index 3dbd386a..2a10dc12 100644
+--- a/packages/experimental/webworker-runtime/src/shell/process/host.ts
++++ b/packages/experimental/webworker-runtime/src/shell/process/host.ts
+@@ -75,0 +76,4 @@ async function serveFilesystemCall(fs: ShellFileSystem, op: FilesystemOperation,
++    case 'readBytes': return await fs.readBytes(args[0] as string)
++    case 'writeBytes':
++      await fs.writeBytes(args[0] as string, args[1] as Uint8Array)
++      return undefined
+diff --git a/packages/experimental/webworker-runtime/src/shell/process/landlock.ts b/packages/experimental/webworker-runtime/src/shell/process/landlock.ts
+index 5d8c8c3c..a7fd9830 100644
+--- a/packages/experimental/webworker-runtime/src/shell/process/landlock.ts
++++ b/packages/experimental/webworker-runtime/src/shell/process/landlock.ts
+@@ -143,0 +144,8 @@ export async function landlockFileSystem(
++    readBytes: async (path: string): Promise<Uint8Array> => {
++      const target = readPath(path, 'open')
++      return target === NULL_PATH ? new Uint8Array() : await base.readBytes(target)
++    },
++    writeBytes: async (path: string, data: Uint8Array): Promise<void> => {
++      const target = writePath(path, 'open')
++      if (target !== NULL_PATH) await base.writeBytes(target, data)
++    },
+diff --git a/packages/experimental/webworker-runtime/src/shell/process/protocol.ts b/packages/experimental/webworker-runtime/src/shell/process/protocol.ts
+index 187a18af..c2df7b0c 100644
+--- a/packages/experimental/webworker-runtime/src/shell/process/protocol.ts
++++ b/packages/experimental/webworker-runtime/src/shell/process/protocol.ts
+@@ -46 +46 @@ export interface ShellSignalFrame {
+-export type FilesystemOperation = 'stat' | 'list' | 'readText' | 'writeText' | 'mkdir' | 'remove' | 'rename'
++export type FilesystemOperation = 'stat' | 'list' | 'readText' | 'writeText' | 'readBytes' | 'writeBytes' | 'mkdir' | 'remove' | 'rename'
+diff --git a/packages/experimental/webworker-runtime/src/shell/programs/git.ts b/packages/experimental/webworker-runtime/src/shell/programs/git.ts
+new file mode 100644
+index 00000000..89107f11
+--- /dev/null
++++ b/packages/experimental/webworker-runtime/src/shell/programs/git.ts
+@@ -0,0 +1,104 @@
++import { clone } from 'isomorphic-git'
++import http from 'isomorphic-git/http/web'
++import { filesystemError, resolveIn } from '../fs-access.ts'
++import type { ShellProgram } from '../types.ts'
++
++/** A shallow public GitHub clone into the browser filesystem. */
++export const git: ShellProgram = async (argv, io, state, fs) => {
++  const args = [...argv.slice(1)]
++  let cwd = state.cwd
++  while (args[0] === '-C' && args[1]) { args.shift(); cwd = resolveIn(cwd, args.shift()!) }
++  if (args.shift() !== 'clone') throw new Error('This browser supports git clone of public GitHub repositories')
++  let ref: string | undefined
++  let depth = 1
++  const positional: string[] = []
++  while (args.length) {
++    const arg = args.shift()!
++    if (arg === '--') { positional.push(...args); break }
++    if (arg === '--depth') depth = Number(args.shift())
++    else if (arg.startsWith('--depth=')) depth = Number(arg.slice(8))
++    else if (arg === '-b' || arg === '--branch') {
++      ref = args.shift()
++      if (!ref || ref.startsWith('-')) throw new Error('A branch name is required')
++    }
++    else if (arg.startsWith('--branch=')) ref = arg.slice(9)
++    else if (['--single-branch', '--no-tags', '-q', '--quiet'].includes(arg)) continue
++    else if (arg.startsWith('-')) throw new Error(`Unsupported clone option: ${arg}`)
++    else positional.push(arg)
++  }
++  if (!Number.isInteger(depth) || depth < 1 || depth > 100) throw new Error('Clone depth must be between 1 and 100')
++  if (positional.length < 1 || positional.length > 2) throw new Error('Usage: git clone [--depth N] [-b branch] https://github.com/owner/repo [directory]')
++  const match = /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+?)\/?$/.exec(positional[0]!)
++  if (!match) throw new Error('Use a public https://github.com/owner/repo URL')
++  const name = match[2]!.replace(/\.git$/, '')
++  const url = `https://github.com/${match[1]}/${name}.git`
++  const dir = resolveIn(cwd, positional[1] ?? name)
++  if (await fs.stat(dir)) throw new Error(`Destination already exists: ${dir}`)
++  const staging = `${dir}.clone-${crypto.randomUUID()}`
++  const signal = state.signal
++  const check = (): void => { signal?.throwIfAborted() }
++  const stat = async (path: string) => {
++    check()
++    const value = await fs.stat(path)
++    if (!value) throw filesystemError('ENOENT', 'stat', path)
++    return {
++      ...value, mode: value.directory ? 0o040755 : 0o100644,
++      mtime: new Date(value.mtimeMs), ctime: new Date(value.mtimeMs), ctimeMs: value.mtimeMs,
++      dev: 0, ino: 0, uid: 0, gid: 0,
++      isDirectory: () => value.directory, isFile: () => !value.directory, isSymbolicLink: () => false,
++    }
++  }
++  const promises = {
++    stat, lstat: stat,
++    readFile: async (path: string, encoding?: string | { encoding?: string }) => {
++      check()
++      return encoding === 'utf8' || (typeof encoding === 'object' && encoding.encoding === 'utf8')
++        ? await fs.readText(path) : await fs.readBytes(path)
++    },
++    writeFile: async (path: string, data: string | Uint8Array) => {
++      check()
++      await fs.writeBytes(path, typeof data === 'string' ? new TextEncoder().encode(data) : data)
++    },
++    readdir: async (path: string) => { check(); return (await fs.list(path)).map(entry => entry.name) },
++    mkdir: async (path: string) => { check(); await fs.mkdir(path, false) },
++    rmdir: async (path: string) => { check(); await fs.remove(path, { recursive: false, force: false }) },
++    unlink: async (path: string) => { check(); await fs.remove(path, { recursive: false, force: false }) },
++    readlink: async (path: string) => await fs.readText(path),
++    symlink: async (target: string, path: string) => {
++      check()
++      io.err(`Symlink stored as link text: ${path.slice(staging.length + 1)}\n`)
++      await fs.writeText(path, target)
++    },
++  }
++  const transport: typeof http = {
++    async request(input) {
++      check()
++      const response = await http.request({
++        ...input, url: `${globalThis.location.origin}/fetch?url=${encodeURIComponent(input.url)}`,
++        headers: { 'x-dsh-fetch': '1' }, signal,
++      })
++      if (response.statusCode !== 200) throw new Error(`GitHub download failed (HTTP ${response.statusCode})`)
++      const statusCode = Number(response.headers?.['x-dsh-status'])
++      if (!Number.isInteger(statusCode) || statusCode < 100 || statusCode > 599) {
++        throw new Error('The Cloudflare fetch route is unavailable')
++      }
++      return {
++        ...response, url: input.url, statusCode,
++        headers: { 'content-type': response.headers?.['x-dsh-content-type'] ?? '' },
++      }
++    },
++  }
++  io.err(`Cloning into '${positional[1] ?? name}' (depth ${depth})...\n`)
++  await fs.mkdir(staging, false)
++  try {
++    await clone({ fs: { promises }, http: transport, dir: staging, url, depth, ref, singleBranch: true, noTags: true })
++    check()
++    if (await fs.stat(dir)) throw new Error(`Destination already exists: ${dir}`)
++    await fs.rename(staging, dir)
++  } catch (error) {
++    await fs.remove(staging, { recursive: true, force: true })
++    throw error
++  }
++  io.out(`Cloned ${url} into ${dir}\n`)
++  return 0
++}
+diff --git a/packages/experimental/webworker-runtime/src/shell/programs/index.ts b/packages/experimental/webworker-runtime/src/shell/programs/index.ts
+index 2034af37..90a87512 100644
+--- a/packages/experimental/webworker-runtime/src/shell/programs/index.ts
++++ b/packages/experimental/webworker-runtime/src/shell/programs/index.ts
+@@ -12,0 +13 @@ import { TEXT_PROGRAMS } from './text.ts'
++import { git } from './git.ts'
+@@ -25,0 +27 @@ export function standardPrograms(): ReadonlyMap<string, ShellProgram> {
++    ['git', git],
+diff --git a/packages/experimental/webworker-runtime/src/shell/types.ts b/packages/experimental/webworker-runtime/src/shell/types.ts
+index ac258e08..e3d025fa 100644
+--- a/packages/experimental/webworker-runtime/src/shell/types.ts
++++ b/packages/experimental/webworker-runtime/src/shell/types.ts
+@@ -90,0 +91,4 @@ export interface ShellFileSystem {
++  /** Read exact file bytes, including Git objects and binary workspace files. */
++  readBytes(path: string): Promise<Uint8Array>
++  /** Write exact file bytes; the parent must exist. */
++  writeBytes(path: string, data: Uint8Array): Promise<void>
+diff --git a/packages/experimental/webworker-runtime/src/worker.ts b/packages/experimental/webworker-runtime/src/worker.ts
+index f0912aef..b0436fef 100644
+--- a/packages/experimental/webworker-runtime/src/worker.ts
++++ b/packages/experimental/webworker-runtime/src/worker.ts
+@@ -27,0 +28,4 @@ import { runShellProcess } from './shell/process/host.ts'
++for (const name of ['dispose', 'asyncDispose']) {
++  if (!Object.hasOwn(Symbol, name)) Object.defineProperty(Symbol, name, { value: Symbol.for(`Symbol.${name}`) })
++}
++
+diff --git a/packages/experimental/webworker-runtime/tests/node/child-process.spec.ts b/packages/experimental/webworker-runtime/tests/node/child-process.spec.ts
+index e105a94f..08fa0520 100644
+--- a/packages/experimental/webworker-runtime/tests/node/child-process.spec.ts
++++ b/packages/experimental/webworker-runtime/tests/node/child-process.spec.ts
+@@ -158,0 +159,2 @@ it('enforces every ShellFileSystem operation and virtual device edge', async ()
++  expect(await guarded.readBytes('/dev/null')).toEqual(new Uint8Array())
++  await guarded.writeBytes('/dev/null', new Uint8Array([0, 255]))
+@@ -167,0 +170,2 @@ it('enforces every ShellFileSystem operation and virtual device edge', async ()
++  await expect(guarded.readBytes(`${HOME}/private.txt`)).rejects.toMatchObject({ code: 'EACCES' })
++  await expect(guarded.writeBytes(`${HOME}/private.txt`, new Uint8Array([0, 255]))).rejects.toMatchObject({ code: 'EACCES' })
+@@ -176,0 +181,2 @@ it('enforces every ShellFileSystem operation and virtual device edge', async ()
++  await guarded.writeBytes('binary', new Uint8Array([0, 255, 128, 10]))
++  expect(await guarded.readBytes('binary')).toEqual(new Uint8Array([0, 255, 128, 10]))
+diff --git a/packages/experimental/webworker-runtime/tests/shell/injected-run.spec.ts b/packages/experimental/webworker-runtime/tests/shell/injected-run.spec.ts
+index 8ed2035d..b427319f 100644
+--- a/packages/experimental/webworker-runtime/tests/shell/injected-run.spec.ts
++++ b/packages/experimental/webworker-runtime/tests/shell/injected-run.spec.ts
+@@ -52,0 +53,2 @@ function recordingFileSystem(files: Record<string, string>): {
++    readBytes: async path => new TextEncoder().encode(await fs.readText(path)),
++    writeBytes: async (path, bytes) => { await fs.writeText(path, new TextDecoder().decode(bytes)) },
+diff --git a/packages/extensions/cordis-host-runner/src/guard.ts b/packages/extensions/cordis-host-runner/src/guard.ts
+index 4c0dd214..df6d0cbe 100644
+--- a/packages/extensions/cordis-host-runner/src/guard.ts
++++ b/packages/extensions/cordis-host-runner/src/guard.ts
+@@ -50 +50 @@ function hasIntrinsicConstructor(prototype: object, name: 'Array' | 'Object'): b
+-      && Function.prototype.toString.call(constructor) === `function ${name}() { [native code] }`
++      && Function.prototype.toString.call(constructor) === Function.prototype.toString.call(name === 'Array' ? Array : Object)
+diff --git a/packages/ptc-runtime/ptc-runtime-node/src/json-wire.ts b/packages/ptc-runtime/ptc-runtime-node/src/json-wire.ts
+index 6fc8b293..bbba7c24 100644
+--- a/packages/ptc-runtime/ptc-runtime-node/src/json-wire.ts
++++ b/packages/ptc-runtime/ptc-runtime-node/src/json-wire.ts
+@@ -16,0 +17,2 @@ const intrinsicReflectApply = Reflect.get(Reflect, 'apply') as (
++const intrinsicArrayConstructorSource = intrinsicReflectApply(intrinsicFunctionToString, Array, [])
++const intrinsicObjectConstructorSource = intrinsicReflectApply(intrinsicFunctionToString, Object, [])
+@@ -90 +92 @@ function hasIntrinsicConstructor(prototype: object, name: 'Array' | 'Object'): b
+-      && intrinsicReflectApply(intrinsicFunctionToString, constructor, []) === `function ${name}() { [native code] }`
++      && intrinsicReflectApply(intrinsicFunctionToString, constructor, []) === (name === 'Array' ? intrinsicArrayConstructorSource : intrinsicObjectConstructorSource)
+diff --git a/packages/web/web-fetch-http/src/provider.ts b/packages/web/web-fetch-http/src/provider.ts
+index 3357124e..8328cbd1 100644
+--- a/packages/web/web-fetch-http/src/provider.ts
++++ b/packages/web/web-fetch-http/src/provider.ts
+@@ -12 +11,0 @@ import { deadline, timeoutOf } from '@deepseek-ai/dsh-timeout'
+-import type { Response } from 'undici'
+@@ -14,0 +14,3 @@ import { classifyContentType, decoderForCharset, isSameOrigin, parseCharset, val
++type Response = Pick<globalThis.Response, 'status' | 'headers' | 'body'>
++  | Pick<import('undici').Response, 'status' | 'headers' | 'body'>
++
+@@ -107 +109,16 @@ export class HttpFetchProvider implements WebFetchProvider {
+-      // Keep the Node-only transport out of browser-worker startup; a real request loads it here.
++      const origin = (globalThis as { location?: { origin: string } }).location?.origin
++      if (origin !== undefined) {
++        const response = await globalThis.fetch(`${origin}/fetch?url=${encodeURIComponent(url.href)}`, {
++          headers: { 'x-dsh-fetch': '1' }, signal, redirect: 'error',
++        })
++        if (!response.ok) throw new Error(await response.text())
++        const status = Number(response.headers.get('x-dsh-status'))
++        if (!Number.isInteger(status) || status < 100 || status > 599) {
++          await response.body?.cancel()
++          throw new Error('The Cloudflare fetch route is unavailable')
++        }
++        const forwarded = new Headers({ 'content-type': response.headers.get('x-dsh-content-type') ?? '' })
++        const location = response.headers.get('x-dsh-location')
++        if (location) forwarded.set('location', location)
++        return { status, headers: forwarded, body: response.body }
++      }
 diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
-index 5a36a159..583ad5cd 100644
+index 5a36a159..7379b134 100644
 --- a/pnpm-lock.yaml
 +++ b/pnpm-lock.yaml
 @@ -33,0 +34,3 @@ importers:
@@ -753,7 +1882,50 @@ index 5a36a159..583ad5cd 100644
 +        specifier: workspace:*
 +        version: link:../../credentials/credentials
 +
-@@ -9815,0 +9831,28 @@ importers:
+@@ -9815,0 +9831,71 @@ importers:
++  packages/experimental/llm-chatgpt-browser:
++    dependencies:
++      eventsource-parser:
++        specifier: ^3.1.0
++        version: 3.1.0
++      jose:
++        specifier: ^6.2.3
++        version: 6.2.3
++      zod:
++        specifier: ^4.4.3
++        version: 4.4.3
++    devDependencies:
++      '@deepseek-ai/cordis':
++        specifier: workspace:~
++        version: link:../../../vendor/cordis
++      '@deepseek-ai/dsh-api-remotes':
++        specifier: workspace:*
++        version: link:../../api/remotes
++      '@deepseek-ai/dsh-client-ui-primitives':
++        specifier: workspace:*
++        version: link:../../client/ui-primitives
++      '@deepseek-ai/dsh-client-ui-renderer':
++        specifier: workspace:*
++        version: link:../../client/ui-renderer
++      '@deepseek-ai/dsh-client-ui-settings':
++        specifier: workspace:*
++        version: link:../../client/ui-settings
++      '@deepseek-ai/dsh-client-ui-slots':
++        specifier: workspace:*
++        version: link:../../client/ui-slots
++      '@deepseek-ai/dsh-credentials':
++        specifier: workspace:*
++        version: link:../../credentials/credentials
++      '@deepseek-ai/dsh-llm':
++        specifier: workspace:*
++        version: link:../../llm/llm
++      '@deepseek-ai/dsh-typert-protocol':
++        specifier: workspace:*
++        version: link:../../typert/protocol
++      react:
++        specifier: ^18.2.0
++        version: 18.3.1
++
 +  packages/experimental/llm-openrouter-browser:
 +    dependencies:
 +      '@deepseek-ai/schemastery':
@@ -782,70 +1954,229 @@ index 5a36a159..583ad5cd 100644
 +        specifier: workspace:*
 +        version: link:../../settings/settings
 +
+@@ -10842,0 +10929,3 @@ importers:
++      isomorphic-git:
++        specifier: 1.44.4
++        version: 1.44.4
+@@ -21193,0 +21283,3 @@ packages:
++  async-lock@1.4.1:
++    resolution: {integrity: sha512-Az2ZTpuytrtqENulXwO3GGv1Bztugx6TT37NIo7imr/Qo0gsYiGtSdBa2B6fsXhTpVZDNfu1Qn3pk531e3q+nQ==}
++
+@@ -21203,0 +21296,4 @@ packages:
++  available-typed-arrays@1.0.7:
++    resolution: {integrity: sha512-wvUjBtSGN7+7SjNpq/9M2Tg350UZD3q62IFZLbRAR1bSMlCo1ZaeW+BJ+D090e4hIIZLBcTDWe4Mh4jvUDajzQ==}
++    engines: {node: '>= 0.4'}
++
+@@ -21422,0 +21519,4 @@ packages:
++  call-bind@1.0.9:
++    resolution: {integrity: sha512-a/hy+pNsFUTR+Iz8TCJvXudKVLAnz/DyeSUo10I5yvFDQJBFU2s9uqQpoSrJlroHUKoKqzg+epxyP9lqFdzfBQ==}
++    engines: {node: '>= 0.4'}
++
+@@ -21501,0 +21602,3 @@ packages:
++  clean-git-ref@2.0.1:
++    resolution: {integrity: sha512-bLSptAy2P0s6hU4PzuIMKmMJJSE6gLXGH1cntDu7bWJUksvuM+7ReOK61mozULErYvP6a15rnYl0zFDef+pyPw==}
++
+@@ -21934,0 +22038,3 @@ packages:
++  diff3@0.0.3:
++    resolution: {integrity: sha512-iSq8ngPOt0K53A6eVr4d5Kn6GNrM2nQZtC740pzIriHtn4pOQ2lyzEXQMBeVcWERN0ye7fhBsk9PbLLQOnUx/g==}
++
+@@ -22341,0 +22448,4 @@ packages:
++  for-each@0.3.5:
++    resolution: {integrity: sha512-dKx12eRCVIzqCxFGplyFKJMPvLEWgmNtUrpTiJIR5u97zEhRG8ySrtboPHZXx7daLxQVrl643cTzbab2tkQjxg==}
++    engines: {node: '>= 0.4'}
++
+@@ -22720,0 +22831,4 @@ packages:
++  is-callable@1.2.7:
++    resolution: {integrity: sha512-1BC0BVFhS/p0qtw6enp8e+8OD0UrK0oFLztSjNzhcKA3WDuJxxAPXzPuPtKkjEY9UUoEWlX/8fgKeu2S8i9JTA==}
++    engines: {node: '>= 0.4'}
++
+@@ -22764,0 +22879,4 @@ packages:
++  is-typed-array@1.1.15:
++    resolution: {integrity: sha512-p3EcsicXjit7SaskXHs1hA91QxgTw46Fv6EFKKGS5DRFLD8yKnohjF3hxoju94b/OcMZoQukzpPpBE9uLVKzgQ==}
++    engines: {node: '>= 0.4'}
++
+@@ -22785,0 +22904,3 @@ packages:
++  isarray@2.0.5:
++    resolution: {integrity: sha512-xHjhDr3cNBK0BzdUJSPXZntQUx/mwMS5Rw4A7lPJ90XGAO6ISP/ePDNuo0vhqOZU+UD5JoodwCAAoZQd3FeAKw==}
++
+@@ -22804,0 +22926,5 @@ packages:
++  isomorphic-git@1.44.4:
++    resolution: {integrity: sha512-uvbZ3b3Vi23O886dBnbreAmkdnttkMtjx6AATrE7MXJaxQg3wd91S81zFPewMk82+U+WvkrB5GjMgDmVO9ieEw==}
++    engines: {node: '>=14.17'}
++    hasBin: true
++
+@@ -23473,0 +23600,3 @@ packages:
++  minimisted@2.0.1:
++    resolution: {integrity: sha512-1oPjfuLQa2caorJUM8HV8lGgWCc0qqAO1MNv/k05G4qslmsndV/5WdNZrqCiyqiz3wohia2Ij2B7w2Dr7/IyrA==}
++
+@@ -23893,0 +24023,4 @@ packages:
++  pify@4.0.1:
++    resolution: {integrity: sha512-uB80kBFb/tfd68bVleG9T5GGsGPjJrLAUpR5PZIrhBnIaRTQRjqdJSsIKkOP6OAIFbj7GOrcudc5pNjZ+geV2g==}
++    engines: {node: '>=6'}
++
+@@ -23940,0 +24074,4 @@ packages:
++  possible-typed-array-names@1.1.0:
++    resolution: {integrity: sha512-/+5VFTchJDoVj3bhoqi6UeymcD00DAwb1nJwamzPvHEszJ4FpF6SNNbUbOS8yI56qHzdV8eK0qEfOSiodkTdxg==}
++    engines: {node: '>= 0.4'}
++
+@@ -24330,0 +24468,4 @@ packages:
++  set-function-length@1.2.2:
++    resolution: {integrity: sha512-pgRc4hJ4/sNjWCSS9AmnS40x3bNMDTknHgL5UaMBTMyJnU90EgWh1Rz+MC9eFu4BuN/UwZjKQuY/1v3rM7HMfg==}
++    engines: {node: '>= 0.4'}
++
+@@ -24336,0 +24478,5 @@ packages:
++  sha.js@2.4.12:
++    resolution: {integrity: sha512-8LzC5+bvI45BjpfXU8V5fdU2mfeKiQe1D1gIMn7XUlF3OTUrpdJpPPH4EMAnF0DsHHdSZqCdSss5qCmJKuiO3w==}
++    engines: {node: '>= 0.10'}
++    hasBin: true
++
+@@ -24645,0 +24792,4 @@ packages:
++  to-buffer@1.2.2:
++    resolution: {integrity: sha512-db0E3UJjcFhpDhAF4tLo03oli3pwl3dbnzXOUIlRKrp+ldk/VUxzpWYZENsw2SZiuBjHAk7DfB0VU7NKdpb6sw==}
++    engines: {node: '>= 0.4'}
++
+@@ -24772,0 +24923,4 @@ packages:
++  typed-array-buffer@1.0.3:
++    resolution: {integrity: sha512-nAYYwfY3qnzX30IkA6AQZjVbtK6duGontcQm1WSG1MD94YLqK0515GNApXkoxKOWMusVssAHWLh9SeaoefYFGw==}
++    engines: {node: '>= 0.4'}
++
+@@ -25166,0 +25321,4 @@ packages:
++  which-typed-array@1.1.24:
++    resolution: {integrity: sha512-wk4Mf4pR5mRP7eYuuTBCIQ9d0ud2Fv2jRLQpfgnRjbOxAFHmjKFValgTpitVKzJJS8ajnYQV2Du1SZ8j6b/EUQ==}
++    engines: {node: '>= 0.4'}
++
+@@ -28709,0 +28868,2 @@ snapshots:
++  async-lock@1.4.1: {}
++
+@@ -28715,0 +28876,4 @@ snapshots:
++  available-typed-arrays@1.0.7:
++    dependencies:
++      possible-typed-array-names: 1.1.0
++
+@@ -28936,0 +29101,7 @@ snapshots:
++  call-bind@1.0.9:
++    dependencies:
++      call-bind-apply-helpers: 1.0.2
++      es-define-property: 1.0.1
++      get-intrinsic: 1.3.0
++      set-function-length: 1.2.2
++
+@@ -28988,0 +29160,2 @@ snapshots:
++  clean-git-ref@2.0.1: {}
++
+@@ -29412 +29584,0 @@ snapshots:
+-    optional: true
+@@ -29447,0 +29620,2 @@ snapshots:
++  diff3@0.0.3: {}
++
+@@ -30057,0 +30232,4 @@ snapshots:
++  for-each@0.3.5:
++    dependencies:
++      is-callable: 1.2.7
++
+@@ -30318 +30495,0 @@ snapshots:
+-    optional: true
+@@ -30517,0 +30695,2 @@ snapshots:
++  is-callable@1.2.7: {}
++
+@@ -30545,0 +30725,4 @@ snapshots:
++  is-typed-array@1.1.15:
++    dependencies:
++      which-typed-array: 1.1.24
++
+@@ -30559,0 +30743,2 @@ snapshots:
++  isarray@2.0.5: {}
++
+@@ -30569,0 +30755,14 @@ snapshots:
++  isomorphic-git@1.44.4:
++    dependencies:
++      async-lock: 1.4.1
++      clean-git-ref: 2.0.1
++      crc-32: 1.2.2
++      diff3: 0.0.3
++      ignore: 5.3.2
++      minimisted: 2.0.1
++      pako: 1.0.11
++      pify: 4.0.1
++      readable-stream: 4.7.0
++      sha.js: 2.4.12
++      simple-get: 4.0.1
++
+@@ -31381,0 +31581,4 @@ snapshots:
++  minimisted@2.0.1:
++    dependencies:
++      minimist: 1.2.8
++
+@@ -31764,0 +31968,2 @@ snapshots:
++  pify@4.0.1: {}
++
+@@ -31811,0 +32017,2 @@ snapshots:
++  possible-typed-array-names@1.1.0: {}
++
+@@ -32272,0 +32480,9 @@ snapshots:
++  set-function-length@1.2.2:
++    dependencies:
++      define-data-property: 1.1.4
++      es-errors: 1.3.0
++      function-bind: 1.1.2
++      get-intrinsic: 1.3.0
++      gopd: 1.2.0
++      has-property-descriptors: 1.0.2
++
+@@ -32276,0 +32493,6 @@ snapshots:
++  sha.js@2.4.12:
++    dependencies:
++      inherits: 2.0.4
++      safe-buffer: 5.2.1
++      to-buffer: 1.2.2
++
+@@ -32655,0 +32878,6 @@ snapshots:
++  to-buffer@1.2.2:
++    dependencies:
++      isarray: 2.0.5
++      safe-buffer: 5.2.1
++      typed-array-buffer: 1.0.3
++
+@@ -32758,0 +32987,6 @@ snapshots:
++  typed-array-buffer@1.0.3:
++    dependencies:
++      call-bound: 1.0.4
++      es-errors: 1.3.0
++      is-typed-array: 1.1.15
++
+@@ -33142,0 +33377,10 @@ snapshots:
++  which-typed-array@1.1.24:
++    dependencies:
++      available-typed-arrays: 1.0.7
++      call-bind: 1.0.9
++      call-bound: 1.0.4
++      for-each: 0.3.5
++      get-proto: 1.0.1
++      gopd: 1.2.0
++      has-tostringtag: 1.0.2
++
 diff --git a/tsconfig.base.json b/tsconfig.base.json
-index 4a56dee4..31016be2 100644
+index 4a56dee4..e0b6ee39 100644
 --- a/tsconfig.base.json
 +++ b/tsconfig.base.json
-@@ -30,0 +31,2 @@
+@@ -30,0 +31,4 @@
++      "@deepseek-ai/dsh-experimental-llm-chatgpt-browser": ["./packages/experimental/llm-chatgpt-browser/src"],
++      "@deepseek-ai/dsh-experimental-llm-chatgpt-browser/client": ["./packages/experimental/llm-chatgpt-browser/src/client/index.ts"],
 +      "@deepseek-ai/dsh-experimental-credentials-memory": ["./packages/experimental/credentials-memory/src"],
 +      "@deepseek-ai/dsh-experimental-llm-openrouter-browser": ["./packages/experimental/llm-openrouter-browser/src"],
+diff --git a/tsconfig.client.json b/tsconfig.client.json
+index 7e4eb917..ee00f4f2 100644
+--- a/tsconfig.client.json
++++ b/tsconfig.client.json
+@@ -58,0 +59 @@
++    { "path": "./packages/experimental/llm-chatgpt-browser/tsconfig.client.json" },
 diff --git a/tsconfig.host.json b/tsconfig.host.json
-index a8196f66..90e03660 100644
+index a8196f66..a50eb720 100644
 --- a/tsconfig.host.json
 +++ b/tsconfig.host.json
 @@ -10,0 +11 @@
 +    "deploy/flare/pack.ts",
-@@ -258,0 +260,2 @@
+@@ -258,0 +260,3 @@
++    { "path": "./packages/experimental/llm-chatgpt-browser/tsconfig.host.json" },
 +    { "path": "./packages/experimental/credentials-memory" },
 +    { "path": "./packages/experimental/llm-openrouter-browser" },
-diff --git a/packages/core/tools/src/json-schema.ts b/packages/core/tools/src/json-schema.ts
-index c064fb294c..56a0269939 100644
---- a/packages/core/tools/src/json-schema.ts
-+++ b/packages/core/tools/src/json-schema.ts
-@@ -98 +98 @@ function hasIntrinsicConstructor(prototype: object, name: 'Array' | 'Object'): b
--      && Function.prototype.toString.call(constructor) === `function ${name}() { [native code] }`
-+      && Function.prototype.toString.call(constructor) === Function.prototype.toString.call(name === 'Array' ? Array : Object)
-diff --git a/packages/extensions/cordis-host-runner/src/guard.ts b/packages/extensions/cordis-host-runner/src/guard.ts
-index 4c0dd214ac..df6d0cbe92 100644
---- a/packages/extensions/cordis-host-runner/src/guard.ts
-+++ b/packages/extensions/cordis-host-runner/src/guard.ts
-@@ -50 +50 @@ function hasIntrinsicConstructor(prototype: object, name: 'Array' | 'Object'): b
--      && Function.prototype.toString.call(constructor) === `function ${name}() { [native code] }`
-+      && Function.prototype.toString.call(constructor) === Function.prototype.toString.call(name === 'Array' ? Array : Object)
-diff --git a/packages/ptc-runtime/ptc-runtime-node/src/json-wire.ts b/packages/ptc-runtime/ptc-runtime-node/src/json-wire.ts
-index 6fc8b29325..bbba7c24a6 100644
---- a/packages/ptc-runtime/ptc-runtime-node/src/json-wire.ts
-+++ b/packages/ptc-runtime/ptc-runtime-node/src/json-wire.ts
-@@ -16,0 +17,2 @@ const intrinsicReflectApply = Reflect.get(Reflect, 'apply') as (
-+const intrinsicArrayConstructorSource = intrinsicReflectApply(intrinsicFunctionToString, Array, [])
-+const intrinsicObjectConstructorSource = intrinsicReflectApply(intrinsicFunctionToString, Object, [])
-@@ -90 +92 @@ function hasIntrinsicConstructor(prototype: object, name: 'Array' | 'Object'): b
--      && intrinsicReflectApply(intrinsicFunctionToString, constructor, []) === `function ${name}() { [native code] }`
-+      && intrinsicReflectApply(intrinsicFunctionToString, constructor, []) === (name === 'Array' ? intrinsicArrayConstructorSource : intrinsicObjectConstructorSource)
-diff --git a/packages/bundle/web-app/presets/cordis.patch.yml b/packages/bundle/web-app/presets/cordis.patch.yml
-index 51bbd00ef9..92cd6ddcf8 100644
---- a/packages/bundle/web-app/presets/cordis.patch.yml
-+++ b/packages/bundle/web-app/presets/cordis.patch.yml
-@@ -33,0 +34 @@
-+            disabled: true
-diff --git a/packages/bundle/web-app/presets/ptc.patch.yml b/packages/bundle/web-app/presets/ptc.patch.yml
-index 034a2a6457..618cf206c5 100644
---- a/packages/bundle/web-app/presets/ptc.patch.yml
-+++ b/packages/bundle/web-app/presets/ptc.patch.yml
-@@ -30,0 +31 @@
-+            disabled: true
-diff --git a/packages/bundle/web-app/presets/standard.patch.yml b/packages/bundle/web-app/presets/standard.patch.yml
-index e702c4b39d..a592cab83a 100644
---- a/packages/bundle/web-app/presets/standard.patch.yml
-+++ b/packages/bundle/web-app/presets/standard.patch.yml
-@@ -30,0 +31 @@
-+            disabled: true
-diff --git a/packages/experimental/webworker-runtime/src/worker.ts b/packages/experimental/webworker-runtime/src/worker.ts
-index f0912aef93..b0436fef84 100644
---- a/packages/experimental/webworker-runtime/src/worker.ts
-+++ b/packages/experimental/webworker-runtime/src/worker.ts
-@@ -27,0 +28,4 @@ import { runShellProcess } from './shell/process/host.ts'
-+for (const name of ['dispose', 'asyncDispose']) {
-+  if (!Object.hasOwn(Symbol, name)) Object.defineProperty(Symbol, name, { value: Symbol.for(`Symbol.${name}`) })
-+}
-+
