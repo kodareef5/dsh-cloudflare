@@ -1,0 +1,1 @@
+DSH_UNLOCK_KEY= # Random 32–128 characters: letters, numbers, - or _. Generate with: openssl rand -hex 32

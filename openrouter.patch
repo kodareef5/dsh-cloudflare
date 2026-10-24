@@ -20,14 +20,80 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
+diff --git a/apps/web/src/flare-unlock.ts b/apps/web/src/flare-unlock.ts
+new file mode 100644
+index 00000000..d231b3ae
+--- /dev/null
++++ b/apps/web/src/flare-unlock.ts
+@@ -0,0 +1,55 @@
++/** Unlock the deployment before the browser workspace starts; retain no key. */
++export async function unlockDeployment(): Promise<void> {
++  let key = new URLSearchParams(location.hash.slice(1)).get('key')
++  if (key !== null) history.replaceState(null, '', location.pathname + location.search)
++  const dialog = document.createElement('dialog')
++  dialog.style.cssText = 'border:1px solid #8886;border-radius:12px;padding:28px;max-width:340px;width:calc(100% - 80px);font:16px/1.5 system-ui;color-scheme:light dark'
++  dialog.innerHTML = `<form method="dialog">
++    <h2 style="margin:0 0 16px;font-size:20px">Unlock workspace</h2>
++    <label for="unlock-key">Deployment key</label>
++    <input id="unlock-key" type="password" autocomplete="off" required maxlength="128"
++      style="box-sizing:border-box;width:100%;padding:10px;margin:8px 0 16px;font:inherit">
++    <button style="padding:8px 16px;font:inherit">Unlock</button>
++    <p role="status" style="margin:16px 0 0;font-size:14px">Use the key from this deployment’s owner.</p>
++  </form>`
++  const form = dialog.querySelector('form')!
++  const input = dialog.querySelector('input')!
++  const button = dialog.querySelector('button')!
++  const status = dialog.querySelector('[role="status"]')!
++  const attempt = async (candidate?: string): Promise<boolean> => {
++    button.disabled = true
++    status.textContent = 'Checking access…'
++    try {
++      const response = await fetch('/unlock', {
++        method: candidate === undefined ? 'GET' : 'POST', body: candidate ?? null,
++        headers: { 'x-dsh-fetch': '1' }, credentials: 'same-origin',
++        cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(15000),
++      })
++      if (response.status === 204) return true
++      status.textContent = response.status === 401 && candidate === undefined ? 'Use the key from this deployment’s owner.' : [401, 429, 503].includes(response.status)
++        ? await response.text() : `Unlock unavailable (HTTP ${response.status}). Check the deployment.`
++    } catch {
++      status.textContent = 'Could not reach this deployment. Try again.'
++    } finally {
++      button.disabled = false
++    }
++    return false
++  }
++  const initial = attempt(key ?? undefined)
++  key = null
++  if (await initial) return
++  document.body.append(dialog)
++  dialog.addEventListener('cancel', event => event.preventDefault())
++  await new Promise<void>((resolve) => {
++    form.addEventListener('submit', (event) => {
++      event.preventDefault()
++      if (button.disabled) return
++      const result = attempt(input.value)
++      input.value = ''
++      void result.then((ok) => { if (ok) resolve(); else input.focus() })
++    })
++    dialog.showModal()
++    input.focus()
++  })
++  dialog.remove()
++}
 diff --git a/apps/web/src/preview.ts b/apps/web/src/preview.ts
-index f3d51f8b..4206896a 100644
+index f3d51f8b..157e3515 100644
 --- a/apps/web/src/preview.ts
 +++ b/apps/web/src/preview.ts
 @@ -9 +9 @@ import {
 -  chooseWorkerHostSource, connectWorkerHost, IMAGE_FILE_NAME,
-+  connectWorkerHost, IMAGE_FILE_NAME,
-@@ -13,2 +13 @@ const image = `preview/${IMAGE_FILE_NAME}`
++  connectWorkerHost, holdWorkerHostBoot, IMAGE_FILE_NAME,
+@@ -10,0 +11 @@ import {
++import { unlockDeployment } from './flare-unlock.ts'
+@@ -11,0 +13,2 @@ import {
++holdWorkerHostBoot()
++await unlockDeployment()
+@@ -13,2 +16 @@ const image = `preview/${IMAGE_FILE_NAME}`
 -const source = await chooseWorkerHostSource({ image })
 -await connectWorkerHost(new DshWorker({ name: 'dsh-host' }), { image, overlays: source.overlays })
 +await connectWorkerHost(new DshWorker({ name: 'dsh-host' }), { image, overlays: [] })
@@ -645,7 +711,7 @@ index 00000000..518c4f02
 +}
 diff --git a/packages/experimental/llm-chatgpt-browser/src/auth.ts b/packages/experimental/llm-chatgpt-browser/src/auth.ts
 new file mode 100644
-index 00000000..611bc853
+index 00000000..6cb7940c
 --- /dev/null
 +++ b/packages/experimental/llm-chatgpt-browser/src/auth.ts
 @@ -0,0 +1,173 @@
@@ -683,7 +749,7 @@ index 00000000..611bc853
 +    return await fetch(`${globalThis.location.origin}/openai/${route}`, {
 +      ...init, headers: { ...Object.fromEntries(new Headers(init.headers)), 'x-dsh-fetch': '1' },
 +      signal: AbortSignal.any([this.lifetime, ...route === 'revoke' ? [] : [this.account.signal], AbortSignal.timeout(300000), ...init.signal ? [init.signal] : []]),
-+      credentials: 'omit', cache: 'no-store', redirect: 'error',
++      credentials: 'same-origin', cache: 'no-store', redirect: 'error',
 +    })
 +  }
 +
@@ -938,10 +1004,10 @@ index 00000000..81986019
 +}
 diff --git a/packages/experimental/llm-chatgpt-browser/tests/browser.spec.ts b/packages/experimental/llm-chatgpt-browser/tests/browser.spec.ts
 new file mode 100644
-index 00000000..ead27b23
+index 00000000..e9e535d0
 --- /dev/null
 +++ b/packages/experimental/llm-chatgpt-browser/tests/browser.spec.ts
-@@ -0,0 +1,235 @@
+@@ -0,0 +1,237 @@
 +import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 +import { Context } from '@deepseek-ai/cordis'
 +import { credentialKey } from '@deepseek-ai/dsh-credentials'
@@ -980,6 +1046,8 @@ index 00000000..ead27b23
 +  vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit = {}) => {
 +    init.signal?.throwIfAborted()
 +    const route = new URL(url).pathname
++    expect(new URL(url).origin).toBe('https://flare.example')
++    expect(init.credentials).toBe('same-origin')
 +    requests.push({ route, init })
 +    if (route === '/openai/jwks') return Response.json({ keys: [{ ...jwk, kid: 'test', alg: 'RS256', use: 'sig' }] })
 +    if (route === '/openai/token') {
@@ -1690,6 +1758,13 @@ index d9aae055..952af5dd 100644
 -    "@deepseek-ai/dsh-session-projection": "workspace:*",
 @@ -62,0 +63 @@
 +    "@deepseek-ai/dsh-session-projection": "workspace:*",
+diff --git a/packages/experimental/webworker-runtime/src/client/index.ts b/packages/experimental/webworker-runtime/src/client/index.ts
+index ab44c85d..7d5f6f89 100644
+--- a/packages/experimental/webworker-runtime/src/client/index.ts
++++ b/packages/experimental/webworker-runtime/src/client/index.ts
+@@ -97 +97 @@ function bootReadyGate(): PromiseWithResolvers<void> {
+-function holdWorkerHostBoot(): void {
++export function holdWorkerHostBoot(): void {
 diff --git a/packages/experimental/webworker-runtime/src/shell/fs-access.ts b/packages/experimental/webworker-runtime/src/shell/fs-access.ts
 index 9099c435..965ccf6d 100644
 --- a/packages/experimental/webworker-runtime/src/shell/fs-access.ts

@@ -1,4 +1,52 @@
 const MiB = 1024 * 1024;
+const cookieName = "__Host-dsh_unlock";
+const sessionMs = 8 * 60 * 60 * 1000;
+const encode = value => new TextEncoder().encode(value);
+const hex = bytes => Array.from(new Uint8Array(bytes), byte => byte.toString(16).padStart(2, "0")).join("");
+const reply = (message, status, headers = {}) => new Response(message, {
+  status, headers: { "cache-control": "no-store", "x-content-type-options": "nosniff", ...headers },
+});
+
+async function unlock(request, env, url) {
+  if (!/^[A-Za-z0-9_-]{32,128}$/.test(env?.DSH_UNLOCK_KEY ?? "")) {
+    return reply("Set the DSH_UNLOCK_KEY Worker secret to a random 32–128 character key (letters, numbers, - or _).", 503);
+  }
+  if (!env.NETWORK_LIMIT || !env.UNLOCK_ATTEMPTS) return reply("Unlock rate limits are not configured.", 503);
+  const isUnlock = url.pathname === "/unlock";
+  if (isUnlock && !["GET", "POST"].includes(request.method)) return reply("Method not allowed", 405);
+  const key = await crypto.subtle.importKey("raw", encode(env.DSH_UNLOCK_KEY), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
+  const sign = message => crypto.subtle.sign("HMAC", key, encode(message));
+  const limited = async (binding, key) => {
+    try {
+      return (await binding.limit({ key })).success ? null
+        : reply("Too many requests. Try again in a minute.", 429, { "retry-after": "60" });
+    } catch {
+      return reply("Unlock rate limits are unavailable. Try again shortly.", 503);
+    }
+  };
+  if (isUnlock && request.method === "POST") {
+    const denied = await limited(env.UNLOCK_ATTEMPTS, `${url.origin}:${request.headers.get("cf-connecting-ip") ?? "unknown"}`);
+    if (denied) return denied;
+    let candidate;
+    try { candidate = await new Response(bounded(request.body, 128)).text(); }
+    catch { return reply("Invalid unlock key", 401); }
+    // WebCrypto checks equality without a JavaScript string timing comparison.
+    const proof = await sign(env.DSH_UNLOCK_KEY);
+    if (!await crypto.subtle.verify("HMAC", key, proof, encode(candidate))) return reply("Invalid unlock key", 401);
+    const expires = Date.now() + sessionMs;
+    const signature = hex(await sign(`session:${url.origin}:${expires}`));
+    return reply(null, 204, { "set-cookie": `${cookieName}=${expires}.${signature}; Path=/; HttpOnly; Secure; SameSite=Strict` });
+  }
+  const token = request.headers.get("cookie")?.split(";").map(part => part.trim()).find(part => part.startsWith(`${cookieName}=`))?.slice(cookieName.length + 1);
+  const match = /^(\d{13})\.([a-f0-9]{64})$/.exec(token ?? "");
+  const now = Date.now();
+  if (!match || Number(match[1]) <= now
+    || !await crypto.subtle.verify("HMAC", key, Uint8Array.from(match[2].match(/../g), byte => parseInt(byte, 16)), encode(`session:${url.origin}:${match[1]}`))) {
+    return reply("Deployment locked. Open this app in another tab to unlock without losing your workspace.", 401);
+  }
+  if (isUnlock) return reply(null, 204);
+  return limited(env.NETWORK_LIMIT, hex(await sign(`network:${url.origin}`)));
+}
 
 function bounded(body, limit) {
   let bytes = 0;
@@ -12,15 +60,17 @@ function bounded(body, limit) {
 }
 
 export default {
-  async fetch(request) {
+  async fetch(request, env) {
     const url = new URL(request.url);
     if (request.headers.get("x-dsh-fetch") !== "1"
       || (request.headers.has("origin") && request.headers.get("origin") !== url.origin)
       || request.headers.get("sec-fetch-site") === "cross-site") {
       return new Response("Forbidden", { status: 403 });
     }
+    if (url.pathname !== "/unlock" && url.pathname !== "/fetch" && !url.pathname.startsWith("/openai/")) return reply("Not found", 404);
+    const denied = await unlock(request, env, url);
+    if (denied) return denied;
     if (url.pathname.startsWith("/openai/")) return openai(request, url.pathname.slice(8));
-    if (url.pathname !== "/fetch") return new Response("Not found", { status: 404 });
     let target;
     try { target = new URL(url.searchParams.get("url")); }
     catch { return new Response("Invalid URL", { status: 400 }); }
