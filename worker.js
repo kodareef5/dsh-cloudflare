@@ -101,6 +101,7 @@ async function openai(request, route) {
       status: response.status,
       headers: {
         "content-type": response.headers.get("content-type") ?? "application/json",
+        ...(response.headers.has("x-request-id") ? { "x-request-id": response.headers.get("x-request-id") } : {}),
         "cache-control": "no-store",
         "x-content-type-options": "nosniff",
         "content-security-policy": "default-src 'none'; sandbox",

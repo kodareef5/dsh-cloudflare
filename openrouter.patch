@@ -439,13 +439,13 @@ index 00000000..f44b6b35
 +}
 diff --git a/packages/experimental/llm-chatgpt-browser/src/adapter.ts b/packages/experimental/llm-chatgpt-browser/src/adapter.ts
 new file mode 100644
-index 00000000..91e00f8f
+index 00000000..518c4f02
 --- /dev/null
 +++ b/packages/experimental/llm-chatgpt-browser/src/adapter.ts
-@@ -0,0 +1,170 @@
+@@ -0,0 +1,200 @@
 +import { createParser } from 'eventsource-parser'
 +import { z } from 'zod'
-+import { LlmAdapter, LlmError, ToolCallId } from '@deepseek-ai/dsh-llm'
++import { LlmAdapter, LlmError, ProviderRequestId, ToolCallId } from '@deepseek-ai/dsh-llm'
 +import type { ContentBlock, GenerateOptions, LlmResolvedModelInfo, StreamChunk } from '@deepseek-ai/dsh-llm'
 +import type { ChatGPTAuth } from './auth.ts'
 +
@@ -465,6 +465,36 @@ index 00000000..91e00f8f
 +  item: object.optional(), response: z.object({ output: z.array(object).optional(), usage: usageSchema.nullish(),
 +    error: z.object({ code: z.string() }).nullish() }).optional(),
 +})
++
++async function responseError(response: Response, token: string): Promise<LlmError> {
++  const reader = response.body?.getReader()
++  const decoder = new TextDecoder()
++  let body = '', bytes = 0
++  try {
++    while (reader && bytes < 8192) {
++      const chunk = await reader.read()
++      if (chunk.done) { body += decoder.decode(); break }
++      const part = chunk.value.subarray(0, 8192 - bytes)
++      bytes += part.byteLength
++      body += decoder.decode(part, { stream: true })
++    }
++  } finally {
++    if (reader) { await reader.cancel().catch(() => {}); reader.releaseLock() }
++  }
++  let detail = ''
++  try {
++    const parsed = z.object({
++      error: z.object({ code: z.string().nullish(), message: z.string().optional(), param: z.string().nullish() }).nullish(),
++      detail: z.string().optional(),
++    }).parse(JSON.parse(body))
++    detail = [parsed.error?.code, parsed.error?.param, parsed.error?.message ?? parsed.detail].filter(Boolean).join(': ')
++  } catch { /* HTML, oversized, and malformed bodies are identified by their HTTP metadata. */ }
++  const clean = (value: string, limit: number): string => value.replaceAll(token, '[redacted]').replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, limit)
++  const requestId = clean(response.headers.get('x-request-id') ?? '', 200)
++  const type = clean(response.headers.get('content-type') ?? 'missing content-type', 100)
++  return new LlmError(`ChatGPT ${response.ok ? 'did not return an event stream' : 'request failed'} (HTTP ${response.status}; ${type}${requestId ? `; request ${requestId}` : ''}).${detail ? ` ${clean(detail, 500)}` : ''}`,
++    response.ok ? 'INVALID_RESPONSE' : 'PROVIDER_ERROR', { status: response.status, ...requestId ? { requestId: ProviderRequestId(requestId) } : {} })
++}
 +
 +function content(item: z.infer<typeof itemSchema>): ContentBlock {
 +  switch (item.type) {
@@ -539,9 +569,9 @@ index 00000000..91e00f8f
 +        method: 'POST', signal, headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
 +        body: JSON.stringify(requestBody(options)),
 +      })
-+      if (!response.ok) { await response.body?.cancel(); throw new LlmError(`ChatGPT returned HTTP ${response.status}. Check your sign-in and plan usage.`, 'PROVIDER_ERROR') }
-+      if (!response.body || !response.headers.get('content-type')?.includes('text/event-stream')) {
-+        await response.body?.cancel(); throw new LlmError('ChatGPT did not return an event stream.', 'INVALID_RESPONSE')
++      const type = response.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase()
++      if (!response.ok || !response.body || type !== 'text/event-stream') {
++        throw await responseError(response, token)
 +      }
 +      reader = response.body.getReader()
 +      const events: string[] = []
@@ -908,10 +938,10 @@ index 00000000..81986019
 +}
 diff --git a/packages/experimental/llm-chatgpt-browser/tests/browser.spec.ts b/packages/experimental/llm-chatgpt-browser/tests/browser.spec.ts
 new file mode 100644
-index 00000000..3d2cd6fe
+index 00000000..ead27b23
 --- /dev/null
 +++ b/packages/experimental/llm-chatgpt-browser/tests/browser.spec.ts
-@@ -0,0 +1,191 @@
+@@ -0,0 +1,235 @@
 +import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 +import { Context } from '@deepseek-ai/cordis'
 +import { credentialKey } from '@deepseek-ai/dsh-credentials'
@@ -1102,6 +1132,50 @@ index 00000000..3d2cd6fe
 +  await connect()
 +  respond = () => sse(event === 'truncated' ? [] : [{ type: event, response: { error: { code: 'subscription_sharing_usage_limit_exceeded' } } }])
 +  await expect(collect()).rejects.toThrow()
++})
++
++it('accepts case-insensitive event-stream media types with parameters', async () => {
++  await connect()
++  respond = () => {
++    const response = sse([{ type: 'response.completed', response: { output: [] } }])
++    response.headers.set('content-type', 'Text/Event-Stream; charset=utf-8')
++    return response
++  }
++  expect((await collect()).at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'stop' } })
++})
++
++it.each([200, 429])('preserves HTTP %s JSON error details and request IDs without exposing credentials', async status => {
++  await connect()
++  respond = () => Response.json({ error: { code: 'subscription_sharing_usage_limit_exceeded', message: 'Plan allowance exceeded for test-access.' } },
++    { status, headers: { 'x-request-id': 'req_test' } })
++  await expect(collect()).rejects.toMatchObject({
++    message: `ChatGPT ${status === 200 ? 'did not return an event stream' : 'request failed'} (HTTP ${status}; application/json; request req_test). subscription_sharing_usage_limit_exceeded: Plan allowance exceeded for [redacted].`,
++    failure: { status, requestId: 'req_test' },
++  })
++})
++
++it('reports pre-stream admission details without treating JSON as a completed response', async () => {
++  await connect()
++  respond = () => Response.json({ detail: 'Direct token usage is not enabled.' }, { status: 403 })
++  await expect(collect()).rejects.toThrow('Direct token usage is not enabled.')
++})
++
++it('identifies HTML responses without copying the page into the error', async () => {
++  await connect()
++  respond = () => new Response('<!doctype html><title>Private page content</title>', { headers: { 'content-type': 'text/html' } })
++  await expect(collect()).rejects.toThrow('ChatGPT did not return an event stream (HTTP 200; text/html).')
++})
++
++it('bounds unexpected response reads and cancels the body', async () => {
++  await connect()
++  let pulls = 0, cancelled = false
++  respond = () => new Response(new ReadableStream({
++    pull(controller) { pulls++; controller.enqueue(new Uint8Array(8192)) },
++    cancel() { cancelled = true },
++  }), { headers: { 'content-type': 'text/html' } })
++  await expect(collect()).rejects.toThrow('HTTP 200; text/html')
++  expect(pulls).toBeLessThanOrEqual(2)
++  expect(cancelled).toBe(true)
 +})
 diff --git a/packages/experimental/llm-chatgpt-browser/tsconfig.client.json b/packages/experimental/llm-chatgpt-browser/tsconfig.client.json
 new file mode 100644

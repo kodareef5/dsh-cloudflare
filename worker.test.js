@@ -89,3 +89,19 @@ test('rejects OpenAI redirects without forwarding credentials or exposing the de
   assert.equal(upstream.mock.callCount(), 1);
   assert.equal(cancelled, 1);
 });
+
+test('preserves OpenAI errors and request IDs without leaking upstream cookies', async t => {
+  const body = JSON.stringify({ error: { code: 'subscription_sharing_usage_limit_exceeded' } });
+  t.mock.method(globalThis, 'fetch', async () => new Response(body, {
+    status: 429, headers: { 'content-type': 'application/json', 'x-request-id': 'req_test', 'set-cookie': 'private=value' },
+  }));
+  const response = await worker.fetch(new Request(`${origin}/openai/responses`, {
+    method: 'POST', headers: { 'x-dsh-fetch': '1', authorization: 'Bearer test-token' }, body: '{}',
+  }));
+  assert.equal(response.status, 429);
+  assert.equal(response.headers.get('content-type'), 'application/json');
+  assert.equal(response.headers.get('x-request-id'), 'req_test');
+  assert.equal(response.headers.get('cache-control'), 'no-store');
+  assert.equal(response.headers.has('set-cookie'), false);
+  assert.equal(await response.text(), body);
+});
